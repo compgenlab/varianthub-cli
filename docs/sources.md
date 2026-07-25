@@ -225,22 +225,20 @@ download`, same as any GTF source). The annotation is a **flag**: present when t
 gene is in the set (matched case-insensitively), absent otherwise. You can define several
 gene-list sources over the same GTF (e.g. germline cancer, actionable, drug-target).
 
-## Non-commercial / licensing metadata
+## Commercial-use restrictions
 
-Any source may declare licensing metadata. It is **informational only — nothing is blocked**;
-it just makes restrictions visible so users don't unknowingly obtain data they aren't entitled
-to use commercially.
+Any source may set `non_commercial = true` to mark that its data/annotations carry
+commercial-use restrictions (e.g. CADD). It is **informational only — nothing is blocked**; it
+just makes the restriction visible.
 
 ```toml
 [[sources]]
 name           = "cadd"
 version        = "1.7"
 # …
-non_commercial = true                                   # restricted to non-commercial use
-license        = "CADD non-commercial"
-license_url    = "https://cadd.gs.washington.edu/download"
+non_commercial = true
 ```
 
-`non_commercial` is surfaced by `cganno registry list` (a `[non-commercial]` marker), printed
-as a notice by `cganno download`, and returned in the REST server's `GET /v1/annotations`
-discovery (`"non_commercial": true`) so a public service can show it to users.
+The flag is surfaced by `cganno registry list` (a `[non-commercial]` marker), printed as a
+notice by `cganno download`, and returned in the REST server's `GET /v1/annotations` discovery
+(`"non_commercial": true`) so a public service can show it to users.

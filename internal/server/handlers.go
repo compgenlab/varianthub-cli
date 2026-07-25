@@ -31,7 +31,6 @@ type sourceInfo struct {
 	Version       string           `json:"version,omitempty"`
 	Type          string           `json:"type"` // "data" | "builtin" | "tool" | "genelist"
 	NonCommercial bool             `json:"non_commercial,omitempty"`
-	License       string           `json:"license,omitempty"`
 	Annotations   []annotationInfo `json:"annotations"`
 }
 
@@ -63,8 +62,8 @@ func (s *Server) describeAnnotations() annotationsResponse {
 	for _, src := range s.snap.Sources {
 		info := sourceInfo{
 			Name: src.Name, Version: src.Version, Type: sourceKind(src),
-			NonCommercial: src.NonCommercial, License: src.License,
-			Annotations: []annotationInfo{},
+			NonCommercial: src.NonCommercial,
+			Annotations:   []annotationInfo{},
 		}
 		for _, a := range s.snap.Annotations {
 			if !annotationBelongs(a, src) {

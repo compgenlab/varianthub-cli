@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compgenlab/cganno/internal/bbitest"
 	"github.com/compgenlab/cghts/htsio/tabix"
+	"github.com/compgenlab/varianthub-cli/internal/bbitest"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // sha256Spec returns the "sha256:<hex>" checksum spec for a file on disk.
@@ -362,7 +362,7 @@ func TestBuildSource(t *testing.T) {
 // directly) — guarding the bug where the errgroup's cancelled context leaked into
 // the post-Wait build pass ("context canceled").
 func TestSnapshotBuildSource(t *testing.T) {
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	base := t.TempDir()
 
 	// prebuilt indexed tab the build copies as {output}

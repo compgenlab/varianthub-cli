@@ -9,7 +9,7 @@ import (
 
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // gtfFixture: GeneA (+, coding) over [100,200) and GeneB (-, non-coding lncRNA)
@@ -22,7 +22,7 @@ chr1	t	exon	151	250	.	-	.	gene_id "GeneB"; gene_name "GeneB"; transcript_id "TB"
 // TestSourceAnnotatorsGTF covers the cache/locus path (annotator/overlay), which
 // builds annotators via SourceAnnotators rather than the streaming pipeline. A gtf
 // source must yield ONE grouped annotator that writes every selected field — the
-// regression for `cganno annotate <locus>` failing with "unsupported format gtf".
+// regression for `varhub annotate <locus>` failing with "unsupported format gtf".
 func TestSourceAnnotatorsGTF(t *testing.T) {
 	dir := t.TempDir()
 	gtfPath := filepath.Join(dir, "genes.gtf")

@@ -9,7 +9,7 @@ import (
 
 	"github.com/compgenlab/cghts/htsio/tabix"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // TestGroupedSourceMultiField: two annotations on ONE tab source are served by a

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // testServer builds a Server over a builtins-only snapshot (no data files to

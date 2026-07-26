@@ -1,6 +1,6 @@
 # Source types
 
-Everything cganno annotates from is a **source**, identified `name:version` and living at
+Everything VariantHub annotates from is a **source**, identified `name:version` and living at
 `sources/<name>/<version>/<name>-<version>.toml`. A source is discriminated by its
 `type` field:
 
@@ -44,7 +44,7 @@ checksum_index = "md5:…"
 - **`url` vs `localpath`:** `url`/`url_index` are the canonical reference kept for
   provenance and the registry; `localpath`/`localpath_index` are this machine's files —
   when `localpath` is set the file is used exactly and never downloaded. Environment
-  variables (`${VAR}`, `$CGANNO_HOME`) are expanded in `localpath`. `registry submit`
+  variables (`${VAR}`, `$VARHUB_HOME`) are expanded in `localpath`. `registry submit`
   strips `localpath`.
 - **`checksum`/`checksum_index`** are optional (`md5`|`sha1`|`sha256`); verified while
   downloading when present. The value may be a URL to a checksum file.
@@ -69,7 +69,7 @@ One source can span several files, all queried and merged:
   annotation's `field` is the value column (a number, or a header column name).
 - **`bed`** — interval overlap; `field = "name"` (col 4), `"score"` (col 5), or a column
   number.
-- **`gtf`** — a GTF gene model. cganno bgzip-compresses and tabix-indexes it (GFF preset)
+- **`gtf`** — a GTF gene model. varhub bgzip-compresses and tabix-indexes it (GFF preset)
   once at `download` — cached under `cache_dir` and reused — then **queries it by position**,
   reconstructing only the overlapping gene(s) per variant (bounded memory, so multiple large
   GTFs no longer blow up whole-genome runs). If a bgzipped + tabix-indexed GTF (with a sibling
@@ -87,7 +87,7 @@ One source can span several files, all queried and merged:
 
 **Per-alt bigWig sets.** Allele-specific scores (AlphaMissense, CADD, REVEL) are published
 as four bigWigs — one per alternate base (`a/c/g/t.bw`). Declare them with an `{alt}`
-template; cganno fetches all four and routes each variant to the file for its alt base:
+template; varhub fetches all four and routes each variant to the file for its alt base:
 
 ```toml
 [[sources]]
@@ -103,7 +103,7 @@ url     = "https://hgdownload.soe.ucsc.edu/gbdb/hg38/alphaMissense/{alt}.bw"
 
 An indel (multi-base alt) matches no per-alt file and gets no value.
 
-**Chromosome naming is auto-converted:** cganno builds a converter from the source file's
+**Chromosome naming is auto-converted:** varhub builds a converter from the source file's
 own reference names, so input/source naming (Ensembl `1` / UCSC `chr1` / NCBI
 `NC_000001.11`) is matched automatically.
 
@@ -132,7 +132,7 @@ type = "builtin"
   args    = "PANEL:v1"      # parameterized builtins carry their argument in `args`
 ```
 
-In the VCF pipeline (`cganno annotate --format vcf`, or `-o out.vcf`) builtins emit their
+In the VCF pipeline (`varhub annotate --format vcf`, or `-o out.vcf`) builtins emit their
 `CG_*` INFO tags. The *variant-only* builtins (`auto_id`, `indel`, `tstv`, `tags`) also run
 on the engine/overlay path used by `--format tab|json|text` — they compute from
 chrom/pos/ref/alt alone, so they need no VCF or samples. There each contributes a column /
@@ -162,7 +162,7 @@ per-sample `FORMAT` (GT/SAC/AD) and need a VCF with samples — so those are `-o
 ## Tool sources (`type = "tool"`)
 
 A tool source is an external, often containerized annotator (VEP, ANNOVAR, a custom
-script) that runs **per query**: cganno hands it the query variants, it produces an output
+script) that runs **per query**: varhub hands it the query variants, it produces an output
 file, and that output is consumed exactly like a data source of its `format`.
 
 ```toml
@@ -222,7 +222,7 @@ genes   = ["BRCA1", "BRCA2", "TP53"]   # inline, and/or:
   description = "Variant in a germline cancer gene"
 ```
 
-The referenced GTF is queried once per variant (its bgzip+tabix index is built by `cganno
+The referenced GTF is queried once per variant (its bgzip+tabix index is built by `varhub
 download`, same as any GTF source). The annotation is a **flag**: present when the variant's
 gene is in the set (matched case-insensitively), absent otherwise. You can define several
 gene-list sources over the same GTF (e.g. germline cancer, actionable, drug-target).
@@ -241,6 +241,6 @@ version        = "1.7"
 non_commercial = true
 ```
 
-The flag is surfaced by `cganno registry list` (a `[non-commercial]` marker), printed as a
-notice by `cganno download`, and returned in the REST server's `GET /v1/annotations` discovery
+The flag is surfaced by `varhub registry list` (a `[non-commercial]` marker), printed as a
+notice by `varhub download`, and returned in the REST server's `GET /v1/annotations` discovery
 (`"non_commercial": true`) so a public service can show it to users.

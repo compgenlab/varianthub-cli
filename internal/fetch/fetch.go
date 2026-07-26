@@ -1,4 +1,4 @@
-// Package fetch implements `cganno download`: fetching a snapshot's configured
+// Package fetch implements `varhub download`: fetching a snapshot's configured
 // sources into the cache (one file at a time) and ensuring each is tabix-indexed
 // (reuse a published .tbi/.csi, else build one via hts tabix.IndexWriter). A
 // source with a `localpath` is used exactly and never downloaded; checksums are
@@ -22,10 +22,10 @@ import (
 	"github.com/compgenlab/cghts/htsio/tabix"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/compgenlab/cganno/internal/checksum"
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/software"
-	"github.com/compgenlab/cganno/internal/tool"
+	"github.com/compgenlab/varianthub-cli/internal/checksum"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/software"
+	"github.com/compgenlab/varianthub-cli/internal/tool"
 )
 
 // Result reports what happened for one source.
@@ -38,7 +38,7 @@ type Result struct {
 // fileResult is the per-file outcome (data + index status).
 type fileResult struct{ data, index string }
 
-// logWriter receives `cganno download` progress lines (set to io.Discard for --quiet).
+// logWriter receives `varhub download` progress lines (set to io.Discard for --quiet).
 var logWriter io.Writer = os.Stderr
 
 // SetLogWriter redirects fetch's progress logging (default os.Stderr).
@@ -185,7 +185,7 @@ func buildSource(ctx context.Context, cfg *config.Config, src config.Source, for
 	}
 
 	logf("%s: building source", src.ID())
-	work, err := os.MkdirTemp("", "cganno-build-")
+	work, err := os.MkdirTemp("", "varhub-build-")
 	if err != nil {
 		return Result{}, err
 	}
@@ -345,14 +345,14 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 	// Run setup once (sentinel-gated).
 	if len(t.Setup) > 0 {
 		datadir := cfg.ResolveToolData(t)
-		sentinel := filepath.Join(datadir, ".cganno-setup-done")
+		sentinel := filepath.Join(datadir, ".varhub-setup-done")
 		if fileExists(sentinel) && !force {
 			res.Index = "setup: skipped"
 		} else {
 			if err := os.MkdirAll(datadir, 0o755); err != nil {
 				return res, err
 			}
-			wd, err := os.MkdirTemp("", "cganno-setup-")
+			wd, err := os.MkdirTemp("", "varhub-setup-")
 			if err != nil {
 				return res, err
 			}
@@ -556,7 +556,7 @@ func Missing(cfg *config.Config, src config.Source) []string {
 		}
 		if src.IsGTFSource() {
 			// A GTF is queried via a bgzip+tabix index built under cache_dir; report
-			// it missing until `cganno download` has produced it (unless the raw file
+			// it missing until `varhub download` has produced it (unless the raw file
 			// is already a bgzipped GTF with a sidecar index).
 			if strings.HasSuffix(f.Path, ".gz") && (fileExists(f.Path+".tbi") || fileExists(f.Path+".csi")) {
 				continue
@@ -647,14 +647,14 @@ func presetFor(format string) (*tabix.WriterOpts, error) {
 }
 
 // EnsureIndexedGTF returns a bgzipped + tabix(GFF)-indexed path for a GTF source,
-// building it once under cache_dir and reusing it on later calls (so `cganno
+// building it once under cache_dir and reusing it on later calls (so `varhub
 // download` produces it and annotation is O(1) memory per query). If the source's
 // raw file is already a bgzipped GTF with a sidecar .tbi/.csi, it is used directly.
 // status is "pre-indexed" | "reused" | "built". force rebuilds the cached index.
 func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, status string, err error) {
 	raw := cfg.ResolveSourcePath(src)
 	if !fileExists(raw) {
-		return "", "", fmt.Errorf("GTF source file %s not found (run `cganno download`)", raw)
+		return "", "", fmt.Errorf("GTF source file %s not found (run `varhub download`)", raw)
 	}
 	// A .gz raw with a sidecar tabix index is already usable directly.
 	if strings.HasSuffix(raw, ".gz") && (fileExists(raw+".tbi") || fileExists(raw+".csi")) {

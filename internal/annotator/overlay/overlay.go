@@ -11,9 +11,9 @@ import (
 
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/annotate"
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/annotate"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/model"
 )
 
 // Source annotates loci from a tabix-indexed reference file (or per-chrom files).

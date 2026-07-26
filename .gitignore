@@ -10,9 +10,7 @@
 config.toml
 
 # build output
-/varserv
-/vant
-/cganno
+/varhub
 /bin/
 /dist/
 

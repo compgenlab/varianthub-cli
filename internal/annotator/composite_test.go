@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/compgenlab/cganno/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/model"
 )
 
 type fakeSource struct {

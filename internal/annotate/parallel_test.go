@@ -12,7 +12,7 @@ import (
 	"github.com/compgenlab/cghts/htsio/tabix"
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // writeScoreTab writes a tiny indexed "chrom pos ref alt score" tabix file.

@@ -1,16 +1,16 @@
-# cganno
+# VariantHub
 
 **Fast, no-fuss variant annotation from the command line.**
 
-`cganno` annotates VCF files (and bare loci) against a *versioned* bundle of reference
+VariantHub annotates VCF files (and bare loci) against a *versioned* bundle of reference
 sources — a gene model, ClinVar significance, gnomAD allele frequencies, CADD/REVEL
 scores, your own BED/VCF/TSV tracks, or external tools like VEP — and caches results
 so repeat work is instant. Use it from the command line or run it as an asynchronous
-HTTP service. It's a single static Go binary: no Perl, no cache-install dance, no
-database server to stand up.
+HTTP service. It's a single static Go binary named `varhub`: no Perl, no cache-install
+dance, no database server to stand up.
 
-> The name: `cg` for [compgenlab](https://github.com/compgenlab) + **variant**
-> annotation. Built-in annotations are emitted as `CG_*` INFO tags.
+> Built-in annotations are emitted as `CG_*` INFO tags, following the convention of the
+> underlying [hts library](https://github.com/compgenlab/cghts).
 
 ## Highlights
 
@@ -26,10 +26,10 @@ database server to stand up.
   instead of re-running it.
 - **Scales to whole genomes.** Parallel VCF annotation (`-t`) fans out across annotation
   sources on one machine; to parallelize a few very large sources or scale across nodes, split
-  the input into batches outside cganno and run one job per batch (`cgkit vcf-split` /
+  the input into batches outside VariantHub and run one job per batch (`cgkit vcf-split` /
   `vcf-concat`, e.g. across a job array). BGZF output, and GTF gene models that are
   tabix-indexed and queried by position stay memory-bounded rather than loaded whole into RAM.
-- **REST server.** `cganno server` runs the same engine behind an asynchronous HTTP job
+- **REST server.** `varhub server` runs the same engine behind an asynchronous HTTP job
   queue (submit a locus or an uploaded VCF → poll → fetch JSON results).
 
 ## Install
@@ -37,32 +37,32 @@ database server to stand up.
 Requires Go 1.25+.
 
 ```sh
-go install github.com/compgenlab/cganno/cmd/cganno@latest
+go install github.com/compgenlab/varianthub-cli/cmd/varhub@latest
 ```
 
 ## Quick start
 
 ```sh
-export CGANNO_HOME=~/cganno                 # base dir for config, data, cache, and the DB
-cganno init                                # scaffold config.toml + a starter snapshot
+export VARHUB_HOME=~/varhub                 # base dir for config, data, cache, and the DB
+varhub init                                # scaffold config.toml + a starter snapshot
 
 # add a source, reference it from the snapshot, then fetch the data:
-cganno source add --name gnomad --version 4.1 --url https://… --format vcf --snapshot 2026-07
-cganno annotation add --source gnomad:4.1 --name gnomad_af --field AF --type numeric
-cganno download -j 4
+varhub source add --name gnomad --version 4.1 --url https://… --format vcf --snapshot 2026-07
+varhub annotation add --source gnomad:4.1 --name gnomad_af --field AF --type numeric
+varhub download -j 4
 
 # annotate (default output is TSV; --format vcf|json|text, -o writes to a file):
-cganno annotate chr1:115256529:T:C
-cganno annotate --all --format vcf -o out.vcf in.vcf
+varhub annotate chr1:115256529:T:C
+varhub annotate --all --format vcf -o out.vcf in.vcf
 
 # whole-genome: annotate sources in parallel and write bgzipped VCF (-v for progress):
-cganno annotate --all --format vcf -t 8 -v -o out.vcf.gz in.vcf.gz
+varhub annotate --all --format vcf -t 8 -v -o out.vcf.gz in.vcf.gz
 ```
 
 Or serve the same engine over HTTP (a valid API token is printed to stdout on startup):
 
 ```sh
-cganno server                                   # needs a [server] block in config.toml
+varhub server                                   # needs a [server] block in config.toml
 curl -H "Authorization: Bearer $TOKEN" -d '{"locus":"chr1:115256529:T:C"}' \
      http://127.0.0.1:8080/v1/annotate          # → {"job_id": …}; poll /v1/jobs/{id}/results
 ```
@@ -86,25 +86,25 @@ Full documentation lives in **[`docs/`](docs/README.md)**:
 - **[Parallel & distributed annotation](docs/parallel.md)** — `-t N` source fan-out on one
   machine, and a `cgkit vcf-split` → array → `cgkit vcf-concat` job array across a scheduler.
 - **[Registry](docs/registry.md)** — pulling pre-made sources, and submitting your own.
-- **[REST API](docs/rest-api.md)** — the async annotate server (`cganno server`).
+- **[REST API](docs/rest-api.md)** — the async annotate server (`varhub server`).
 
 ## Status
 
 Early but working: an interactive CLI on a SQLite backend, plus an asynchronous REST annotate
-server (`cganno server`). A Postgres backend is planned. Cohort-style filtering ("which loci are
-pathogenic *and* rare") is intentionally out of scope — cganno produces the annotations; a
+server (`varhub server`). A Postgres backend is planned. Cohort-style filtering ("which loci are
+pathogenic *and* rare") is intentionally out of scope — VariantHub produces the annotations; a
 consumer filters them.
 
 ## Development
 
 ```sh
-make build      # bin/cganno
+make build      # bin/varhub
 make test       # go test -race ./...
 make vet
 make cross      # release tarballs (linux,darwin × amd64,arm64)
 ```
 
-Supported platforms: Linux and macOS on `amd64` and `arm64`. Because cganno is pure Go,
+Supported platforms: Linux and macOS on `amd64` and `arm64`. Because VariantHub is pure Go,
 `make cross` static-cross-compiles all four from any host with no C toolchain.
 
 ## License

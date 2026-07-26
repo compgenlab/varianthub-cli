@@ -18,7 +18,7 @@ install laid out the old way, this guide converts it.
 | `@` version separator (`vep@113`) | `:` version separator (`vep:113`) |
 
 The cache schema also changed (annotations are now assembly-scoped). The cache is a
-rebuildable memo, so just delete `cganno.db` and let it repopulate.
+rebuildable memo, so just delete `varhub.db` and let it repopulate.
 
 ## Steps
 
@@ -26,8 +26,8 @@ Assume an old install with `snapshots/2026-06/{01_builtins,02_clinvar,06_vep}.to
 
 1. **Update `config.toml`.** Rename `snapshots_dir` → `annotations_dir`. Point it at
    the root that will hold `sources/`, `snapshots/` — the default is
-   `./annotations` (i.e. `$CGANNO_HOME/annotations`); use `.` to keep them directly
-   under `$CGANNO_HOME`. The `[database]` block is now optional — keep it to keep the cache,
+   `./annotations` (i.e. `$VARHUB_HOME/annotations`); use `.` to keep them directly
+   under `$VARHUB_HOME`. The `[database]` block is now optional — keep it to keep the cache,
    or remove it to compute without persisting. The global `assembly` key is removed —
    drop it (it's harmlessly ignored if left) and set `assembly` in each snapshot
    manifest instead (step 5).
@@ -78,17 +78,17 @@ Assume an old install with `snapshots/2026-06/{01_builtins,02_clinvar,06_vep}.to
    ```toml
    # config.toml
    [references.GRCh38]
-   fasta = "$CGANNO_HOME/ref/GRCh38.fa.gz"
+   fasta = "$VARHUB_HOME/ref/GRCh38.fa.gz"
    ```
 
 6. **Delete the old cache** so it rebuilds under the new (assembly-scoped) schema:
 
    ```sh
-   rm -f "$CGANNO_HOME/cganno.db"
+   rm -f "$VARHUB_HOME/varhub.db"
    ```
 
-7. **Verify.** `cganno annotation list 2026-06` should show every annotation with the
-   right ones marked `*` (default); `cganno download` should fetch the same sources.
+7. **Verify.** `varhub annotation list 2026-06` should show every annotation with the
+   right ones marked `*` (default); `varhub download` should fetch the same sources.
 
 ## Notes
 
@@ -97,13 +97,13 @@ Assume an old install with `snapshots/2026-06/{01_builtins,02_clinvar,06_vep}.to
   project's clean-migration stance), not silently ignored.
 - The registry now uses `[[sources]]` only (no `[[tools]]`); tool catalog entries live
   under `[[sources]]`, and `registry add-tool` is just an alias for `add-source`.
-- `cganno annotate` now **defaults to TSV** output (it used to print a human report). Pass
+- `varhub annotate` now **defaults to TSV** output (it used to print a human report). Pass
   `--format text` for the old report, or `--format vcf|json` for the other formats.
-- The registry uses the same v2 layout, so `cganno registry pull-snapshot <name>`
+- The registry uses the same v2 layout, so `varhub registry pull-snapshot <name>`
   reconstructs a full v2 tree directly — for public snapshots that's easier than
   migrating by hand.
-- The TUI (`cganno edit`) writes v2 files, so you can also rebuild a snapshot
+- The TUI (`varhub edit`) writes v2 files, so you can also rebuild a snapshot
   interactively: add each source (tool sources included), then use the **members** (`m`) and **defaults**
   (`d`) checkbox editors on the snapshot.
-- A one-shot `cganno migrate` helper may land later; for now the moves above are a
+- A one-shot `varhub migrate` helper may land later; for now the moves above are a
   mechanical `git mv` + a manifest write.

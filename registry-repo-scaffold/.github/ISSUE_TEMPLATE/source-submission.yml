@@ -1,14 +1,14 @@
-# Manual fallback for contributing a source without `cganno registry submit`.
+# Manual fallback for contributing a source without `varhub registry submit`.
 # Filing this (it auto-applies the `source-submission` label) triggers issue-to-pr.
 name: Source submission
-description: Propose an annotation source for the cganno registry
+description: Propose an annotation source for the varhub registry
 title: "source: <name>@<version>"
 labels: [source-submission]
 body:
   - type: markdown
     attributes:
       value: |
-        Prefer `cganno registry submit <release> <source>`, which fills this in for you.
+        Prefer `varhub registry submit <release> <source>`, which fills this in for you.
         Otherwise paste the source's config (a `[[sources]]` block + its
         `[[annotations]]`) in the TOML field below.
   - type: textarea

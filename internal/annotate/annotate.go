@@ -17,12 +17,12 @@ import (
 	"github.com/compgenlab/cghts/vcf"
 	htsann "github.com/compgenlab/cghts/vcf/annotate"
 
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/model"
-	"github.com/compgenlab/cganno/internal/software"
-	"github.com/compgenlab/cganno/internal/store"
-	"github.com/compgenlab/cganno/internal/tool"
-	ivcf "github.com/compgenlab/cganno/internal/vcf"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/software"
+	"github.com/compgenlab/varianthub-cli/internal/store"
+	"github.com/compgenlab/varianthub-cli/internal/tool"
+	ivcf "github.com/compgenlab/varianthub-cli/internal/vcf"
 )
 
 // AnnotateVCFSnapshot annotates inPath → outPath for a whole snapshot. This is the
@@ -45,7 +45,7 @@ func AnnotateVCFSnapshot(ctx context.Context, cfg *config.Config, snap *config.S
 	eff := snap
 	toolSources := snap.ToolSources()
 	if len(toolSources) > 0 {
-		workdir, err := os.MkdirTemp("", "cganno-tools-")
+		workdir, err := os.MkdirTemp("", "varhub-tools-")
 		if err != nil {
 			return err
 		}
@@ -496,7 +496,7 @@ func (d *altDispatch) Close() error {
 	return err
 }
 
-// buildSingle maps cganno's config knobs onto hts annotate options for one file.
+// buildSingle maps varhub's config knobs onto hts annotate options for one file.
 // AutoConvert is on for every annotator: hts builds a contig converter from the
 // source file's own ref names, so input/source chrom naming (Ensembl "1" / UCSC
 // "chr1" / NCBI "NC_000001.11") is matched automatically.

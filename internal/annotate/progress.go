@@ -6,7 +6,7 @@ import (
 	"log"
 )
 
-// Logger emits human-readable progress to stderr for `cganno annotate -v`. It is
+// Logger emits human-readable progress to stderr for `varhub annotate -v`. It is
 // nil-safe: a nil *Logger silently drops every message, so callers can hold a nil
 // logger in the non-verbose case without guarding each call. The logger is carried
 // through the pipeline in the context (WithLogger / LoggerFrom) so threading it
@@ -19,7 +19,7 @@ func NewLogger(w io.Writer) *Logger {
 	if w == nil {
 		return nil
 	}
-	return &Logger{l: log.New(w, "cganno: ", log.Ltime)}
+	return &Logger{l: log.New(w, "varhub: ", log.Ltime)}
 }
 
 // Logf prints one progress line. Safe to call on a nil *Logger (no-op).

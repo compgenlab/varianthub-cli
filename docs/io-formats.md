@@ -1,10 +1,10 @@
 # Input & output formats
 
-There are two "input/output" boundaries in cganno, and it helps to keep them separate:
+There are two "input/output" boundaries in VariantHub, and it helps to keep them separate:
 
-1. **The `cganno annotate` command** — what variants you give it, and how it renders the
+1. **The `varhub annotate` command** — what variants you give it, and how it renders the
    results to you.
-2. **A tool source** — how cganno hands the query variants *into* an external tool
+2. **A tool source** — how varhub hands the query variants *into* an external tool
    (`input_format`), and how it reads the tool's produced file back (`format`).
 
 ---
@@ -14,8 +14,8 @@ There are two "input/output" boundaries in cganno, and it helps to keep them sep
 You annotate either **bare loci** or a **VCF file**:
 
 ```sh
-cganno annotate chr1:100:A:G chr2:200:C:T      # one or more chrom:pos:ref:alt loci
-cganno annotate variants.vcf                   # every site in a VCF (multi-allelic ALTs are split)
+varhub annotate chr1:100:A:G chr2:200:C:T      # one or more chrom:pos:ref:alt loci
+varhub annotate variants.vcf                   # every site in a VCF (multi-allelic ALTs are split)
 ```
 
 Both drive the same per-source lookup — a coordinate query into each source's tabix index,
@@ -35,7 +35,7 @@ Two internal paths back this:
 ## Annotate output
 
 ```sh
-cganno annotate [--all | -a name,…] [--format tab|vcf|json|text] [-o FILE] <vcf|locus…>
+varhub annotate [--all | -a name,…] [--format tab|vcf|json|text] [-o FILE] <vcf|locus…>
 ```
 
 - **`--format`** selects the rendering; the default is **`tab`**.
@@ -56,10 +56,10 @@ cganno annotate [--all | -a name,…] [--format tab|vcf|json|text] [-o FILE] <vc
 | **`vcf`** | a fully-annotated VCF via the streaming pipeline (samples preserved for a VCF input; a sites-only VCF is synthesized for bare loci) |
 
 ```sh
-cganno annotate chr1:100:A:G                       # → TSV (default)
-cganno annotate --format json chr1:100:A:G         # → JSON array
-cganno annotate --format vcf -o out.vcf in.vcf     # → annotated VCF (samples preserved)
-cganno annotate -a clinvar_sig -o hits.tsv in.vcf  # → TSV of one annotation, to a file
+varhub annotate chr1:100:A:G                       # → TSV (default)
+varhub annotate --format json chr1:100:A:G         # → JSON array
+varhub annotate --format vcf -o out.vcf in.vcf     # → annotated VCF (samples preserved)
+varhub annotate -a clinvar_sig -o hits.tsv in.vcf  # → TSV of one annotation, to a file
 ```
 
 ### External tools & the tool-output cache
@@ -98,11 +98,11 @@ unrelated to a `tab` *source's* `ref_col`/`alt_col` (which describe how that sou
 For `--format vcf`, **`-t N`** (`--threads N`) annotates a large VCF in parallel by fanning the
 work out across annotation **sources** (one pass per source, merged positionally). To parallelize
 *within* a single huge source — or to scale across nodes — split the input into batches outside
-cganno and run one `cganno annotate` job per batch (scatter with `cgkit vcf-split`, gather with
+varhub and run one `varhub annotate` job per batch (scatter with `cgkit vcf-split`, gather with
 `cgkit vcf-concat`). See **[Parallel & distributed annotation](parallel.md)**.
 
 ```sh
-cganno annotate --all --format vcf -t 8 -o out.vcf.gz in.vcf.gz
+varhub annotate --all --format vcf -t 8 -o out.vcf.gz in.vcf.gz
 ```
 
 The full story — strategy trade-offs, the `vardist` caveat, a worked SLURM array example, and the
@@ -112,7 +112,7 @@ The full story — strategy trade-offs, the `vardist` caveat, a worked SLURM arr
 
 ## Tool source I/O
 
-A tool source is defined by how cganno writes the query variants for it and how it reads the
+A tool source is defined by how varhub writes the query variants for it and how it reads the
 result back. The variants always reach the tool as a **file** — a single-variant query is
 just a one-line/one-record file; on the cache path only the **novel** loci are written.
 
@@ -120,9 +120,9 @@ just a one-line/one-record file; on the cache path only the **novel** loci are w
 
 Controls how `{input}` is written for the tool:
 
-- **`"vcf"`** (default) — cganno materializes a sites-only VCF (or, on the `--format vcf`
+- **`"vcf"`** (default) — varhub materializes a sites-only VCF (or, on the `--format vcf`
   path, passes the input VCF with its samples). Use this for VCF tools like VEP.
-- **a per-variant line template** — cganno writes one line per variant. For a variant-list
+- **a per-variant line template** — varhub writes one line per variant. For a variant-list
   tool (e.g. ANNOVAR's avinput):
 
   ```toml
@@ -143,7 +143,7 @@ The tool's produced file is read back *exactly like a static source of that form
   (omit → position match); each annotation's `field` is a 1-based column number or a
   header column name. Header lines are `#`-prefixed.
 
-The output must carry coordinates so cganno can key each record back to a locus — which is
+The output must carry coordinates so varhub can key each record back to a locus — which is
 why `vcf` and `tab` are the two supported tool output formats. (A bare `text`/`json`
 stream isn't keyable without coordinates; JSON output support may come later when a concrete
 tool needs it.)

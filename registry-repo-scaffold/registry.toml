@@ -1,11 +1,11 @@
-# cganno public data registry — catalog of source/snapshot configs (NOT the data).
-# Served as a static file; cganno fetches it over HTTPS. Each entry's `file` is a
+# VariantHub public data registry — catalog of source/snapshot configs (NOT the data).
+# Served as a static file; varhub fetches it over HTTPS. Each entry's `file` is a
 # path (relative to this file's directory) to a config snippet. The on-disk name is
 # free (the client loads whatever `file` says); the convention is
 # sources/<name>/<version>/<name>-<version>.toml.
 #
 # Sources are added by the issue-to-pr workflow when a `source-submission` issue
-# is filed (e.g. via `cganno registry submit`). Example shape:
+# is filed (e.g. via `varhub registry submit`). Example shape:
 #
 # [[sources]]
 # name        = "clinvar"
@@ -21,8 +21,8 @@
 # description = "GRCh38 starter snapshot"
 
 # A "build" source: its [[sources.build]] recipe + co-located helper script
-# (alongside the fragment) ship together, so `cganno registry add-source` pulls both
-# and `cganno download` reproduces the indexed file locally.
+# (alongside the fragment) ship together, so `varhub registry add-source` pulls both
+# and `varhub download` reproduces the indexed file locally.
 [[sources]]
 name        = "revel"
 version     = "1.3"

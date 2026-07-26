@@ -2,8 +2,8 @@
 
 This directory is a complete `annotations_dir`: reusable **sources** at the top level
 and a **snapshot manifest** that references them. Point a config at it with
-`annotations_dir = ".../examples"` (or copy the pieces under your own `$CGANNO_HOME`),
-then explore with `cganno annotation list 2026-06`.
+`annotations_dir = ".../examples"` (or copy the pieces under your own `$VARHUB_HOME`),
+then explore with `varhub annotation list 2026-06`.
 
 ```
 examples/

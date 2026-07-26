@@ -1,37 +1,37 @@
 # Overview & config model
 
-cganno is config-driven: you declare **sources** and the **annotations** they expose in
+VariantHub is config-driven: you declare **sources** and the **annotations** they expose in
 TOML, group them into a **snapshot**, then annotate against that snapshot. Nothing about
 adding a new annotation requires code.
 
-## CGANNO_HOME and config.toml
+## VARHUB_HOME and config.toml
 
-`CGANNO_HOME` is the base directory holding `config.toml`. It is chosen as, in order:
-the `-home DIR` flag, else `$CGANNO_HOME`, else the current directory. Config values may
-reference `$CGANNO_HOME` (e.g. `data_dir = "$CGANNO_HOME/data"`), so data, cache, and the
-annotations tree all live under the home no matter where you run cganno from.
+`VARHUB_HOME` is the base directory holding `config.toml`. It is chosen as, in order:
+the `-home DIR` flag, else `$VARHUB_HOME`, else the current directory. Config values may
+reference `$VARHUB_HOME` (e.g. `data_dir = "$VARHUB_HOME/data"`), so data, cache, and the
+annotations tree all live under the home no matter where you run varhub from.
 
 ```toml
 # config.toml
-data_dir         = "$CGANNO_HOME/data"        # base for relative `localpath` files
-cache_dir        = "$CGANNO_HOME/data/cache"  # downloaded sources + tool images/data
+data_dir         = "$VARHUB_HOME/data"        # base for relative `localpath` files
+cache_dir        = "$VARHUB_HOME/data/cache"  # downloaded sources + tool images/data
 default_snapshot = "2026-07"
 annotations_dir  = "./annotations"           # root for sources/ and snapshots/
 
 [database]                                   # OPTIONAL — omit to skip the cache entirely
 backend = "sqlite"
-path    = "$CGANNO_HOME/cganno.db"
+path    = "$VARHUB_HOME/varhub.db"
 
 [references.GRCh38]                           # reference FASTAs, keyed by assembly
 fasta = "/data/ref/GRCh38.fa"
 ```
 
-Run `cganno init` to generate a starter `config.toml` (it prompts for the annotations
+Run `varhub init` to generate a starter `config.toml` (it prompts for the annotations
 directory and the starter snapshot name) plus a `sources/` tree and a snapshot manifest.
 
 ## The annotations tree
 
-Under `annotations_dir`, cganno keeps reusable **sources** and the **snapshot manifests**
+Under `annotations_dir`, varhub keeps reusable **sources** and the **snapshot manifests**
 that reference them. Versioned directories mirror the registry 1:1, so multiple versions
 coexist and local↔registry paths match:
 
@@ -48,7 +48,7 @@ annotations tree.)
 
 ## Snapshot
 
-A **snapshot** is the unit `cganno annotate` runs against, and the version stamped on
+A **snapshot** is the unit `varhub annotate` runs against, and the version stamped on
 results. It is a manifest file that references sources by `name:version` and carries the
 snapshot-scoped settings:
 
@@ -75,11 +75,11 @@ and the server UI. Sources have the same `title` (slug = `name`).
   `--all`/`-a`. Managed here (not on the source), so one source can be default in one
   snapshot and opt-in in another.
 
-Manage everything interactively with **`cganno configure`** — a TUI whose home menu has
+Manage everything interactively with **`varhub configure`** — a TUI whose home menu has
 three areas: **Config settings** (edit `config.toml`), **Sources** (browse/add/edit the
 whole local source library), and **Snapshots** (pick a snapshot, then checkbox-select its
 member sources and default annotations). The same tasks are scriptable via
-`cganno snapshot add|list`, `cganno source add`, and `cganno annotation add`.
+`varhub snapshot add|list`, `varhub source add`, and `varhub annotation add`.
 
 ## Annotation
 
@@ -96,15 +96,15 @@ id, a BED/TSV column, `@ID`, or a GTF field). `field` defaults to `name`.
 | `numeric` | a float, stored numerically; a non-numeric value is dropped for that locus |
 | `flag` | presence only, no value; `field` is ignored |
 
-Add annotations with `cganno annotation add --source <name:version> --name … --field …`,
-or in the TUI. `cganno annotation list <snapshot>` shows every annotation with the default
+Add annotations with `varhub annotation add --source <name:version> --name … --field …`,
+or in the TUI. `varhub annotation list <snapshot>` shows every annotation with the default
 set marked `*`.
 
 ## The cache
 
 The annotation cache is an **optional** SQLite table that memoizes computed values, keyed
-by **assembly + locus + source `name:version`**. Omit the `[database]` block and cganno
-computes without persisting (no `cganno.db` is written); add it to memoize so repeat
+by **assembly + locus + source `name:version`**. Omit the `[database]` block and varhub
+computes without persisting (no `varhub.db` is written); add it to memoize so repeat
 lookups are instant and expensive tools run only on novel loci.
 
 The cache keys on the *locus*, not the annotation set: once a locus is cached it is

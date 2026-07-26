@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/compgenlab/cganno/internal/model"
-	"github.com/compgenlab/cganno/internal/store/sqlite"
+	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store/sqlite"
 )
 
 // safeAnnotator is a concurrency-safe annotator: it counts invocations atomically

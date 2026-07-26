@@ -1,6 +1,6 @@
-# Global cganno config. Run `cganno init` to generate this plus a starter snapshot.
+# Global VariantHub config. Run `varhub init` to generate this plus a starter snapshot.
 #
-# Under annotations_dir, cganno keeps reusable sources plus the snapshot manifests
+# Under annotations_dir, varhub keeps reusable sources plus the snapshot manifests
 # that reference them. A source is a data file, a type="builtin" bundle, or a
 # type="tool" external annotator — all under sources/:
 #
@@ -11,32 +11,32 @@
 # A snapshot is the unit `annotate` runs against and the version stamped on results.
 # See examples/ for a fully worked tree.
 #
-# This file lives in CGANNO_HOME (the -home flag, else $CGANNO_HOME, else the current
-# directory). Values may reference $CGANNO_HOME, which expands to that base dir (or
+# This file lives in VARHUB_HOME (the -home flag, else $VARHUB_HOME, else the current
+# directory). Values may reference $VARHUB_HOME, which expands to that base dir (or
 # "." when unset). Relative paths also resolve against this file.
 
-data_dir         = "$CGANNO_HOME/data"        # base dir for relative `localpath` source files
-cache_dir        = "$CGANNO_HOME/data/cache"  # downloaded sources + tool images/data cached here,
+data_dir         = "$VARHUB_HOME/data"        # base dir for relative `localpath` source files
+cache_dir        = "$VARHUB_HOME/data/cache"  # downloaded sources + tool images/data cached here,
                                              # keyed by name/version (set absolute to share across homes)
-# temp_dir       = "/scratch/cganno-tmp"     # base for scratch dirs (tool workdirs, fan-out parts,
+# temp_dir       = "/scratch/varhub-tmp"     # base for scratch dirs (tool workdirs, fan-out parts,
                                              # synthesized input); default $TMPDIR or /tmp. `annotate
                                              # --temp-dir DIR` overrides it. Set this if /tmp is small.
 default_snapshot = "2026-06"
-annotations_dir  = "./annotations"           # root for sources/, snapshots/ (default: $CGANNO_HOME/annotations)
-# Config registries for `cganno registry` — each is a static HTTPS registry.toml URL.
-# When unset, the built-in default (compgenlab/cganno-public-data-registry) is used.
+annotations_dir  = "./annotations"           # root for sources/, snapshots/ (default: $VARHUB_HOME/annotations)
+# Config registries for `varhub registry` — each is a static HTTPS registry.toml URL.
+# When unset, the built-in default (compgenlab/varianthub-public-data-registry) is used.
 # registries = [
-#   "https://raw.githubusercontent.com/compgenlab/cganno-public-data-registry/main/registry.toml",
+#   "https://raw.githubusercontent.com/compgenlab/varianthub-public-data-registry/main/registry.toml",
 #   "https://example.org/my-lab-registry/registry.toml",
 # ]
 
-# The annotation cache is OPTIONAL: omit the whole [database] block and cganno
-# computes annotations without persisting them (no cganno.db is written). Add it to
+# The annotation cache is OPTIONAL: omit the whole [database] block and varhub
+# computes annotations without persisting them (no varhub.db is written). Add it to
 # memoize results. Cached values are scoped by assembly + data source name:version,
 # so different snapshots share a cache safely and GRCh37/GRCh38 never collide.
 [database]
 backend = "sqlite"                # sqlite (default) | postgres (later)
-path    = "$CGANNO_HOME/cganno.db"
+path    = "$VARHUB_HOME/varhub.db"
 
 # Reference FASTAs, keyed by assembly. A snapshot's reference is looked up from its
 # assembly, so all snapshots on one assembly share a single FASTA (no per-snapshot
@@ -47,7 +47,7 @@ fasta = "/data/ref/GRCh38.fa"
 # [references.GRCh37]
 # fasta = "/data/ref/GRCh37.fa"
 
-# OPTIONAL: the async REST annotate server (`cganno server`). Omit this block if
+# OPTIONAL: the async REST annotate server (`varhub server`). Omit this block if
 # you only use the CLI. The API under /v1 is authenticated with HMAC tokens signed
 # by master_key; a valid token is printed to stdout on startup. Jobs + results are
 # stored in `db` (its own SQLite database, separate from the annotation cache).
@@ -56,7 +56,7 @@ fasta = "/data/ref/GRCh38.fa"
 # master_key = "change-me-to-a-secret"   # HMAC key signing /v1 API tokens (omit if require_token=false)
 # require_token = true                    # bearer-token auth on /v1 (false = open, tokenless public API)
 # workers    = 2                          # async annotation worker pool size (jobs run at once)
-# db         = "$CGANNO_HOME/cganno_server.db"  # job-queue + results DB
+# db         = "$VARHUB_HOME/varhub_server.db"  # job-queue + results DB
 #
 # Large-job performance (VCF uploads):
 # max_chunk_variants = 2000              # split a job into ≤N-variant chunks, annotated in parallel (0 = off)

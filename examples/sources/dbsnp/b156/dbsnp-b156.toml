@@ -3,7 +3,7 @@
 # actual files. When `localpath` is set the file is used exactly and never
 # downloaded. `localpath`/`localpath_index` are stripped by `registry submit`.
 # A relative localpath resolves under data_dir; absolute is used as-is. Environment
-# variables are expanded (${VAR} / $VAR, incl. $CGANNO_HOME). If localpath_index is
+# variables are expanded (${VAR} / $VAR, incl. $VARHUB_HOME). If localpath_index is
 # omitted, the index is expected alongside (<localpath>.tbi).
 [[sources]]
 name            = "dbsnp"

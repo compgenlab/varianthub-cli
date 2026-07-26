@@ -18,8 +18,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/compgenlab/cganno/internal/checksum"
-	"github.com/compgenlab/cganno/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/checksum"
+	"github.com/compgenlab/varianthub-cli/internal/model"
 )
 
 // decodeFragment decodes one snapshot fragment file with debug-friendly errors:
@@ -74,18 +74,18 @@ type Config struct {
 	Registries      []string             `toml:"registries,omitempty"` // multiple registries (HTTPS registry.toml URLs)
 	Database        Database             `toml:"database"`
 	References      map[string]Reference `toml:"references,omitempty"` // assembly -> reference FASTA
-	Server          ServerConfig         `toml:"server,omitempty"`     // REST annotate server (cganno server)
+	Server          ServerConfig         `toml:"server,omitempty"`     // REST annotate server (varhub server)
 
 	dir string `toml:"-"` // directory holding config.toml, for resolving paths
 }
 
 // DefaultRegistry is the built-in registry used when none is configured. A
 // registry is just a static HTTPS registry.toml (any host works).
-const DefaultRegistry = "https://raw.githubusercontent.com/compgenlab/cganno-public-data-registry/main/registry.toml"
+const DefaultRegistry = "https://raw.githubusercontent.com/compgenlab/varianthub-public-data-registry/main/registry.toml"
 
 // DefaultRegistryRepo is the GitHub repo (owner/name) that `registry submit`
 // targets. Submission is GitHub-specific and only works against this repo.
-const DefaultRegistryRepo = "compgenlab/cganno-public-data-registry"
+const DefaultRegistryRepo = "compgenlab/varianthub-public-data-registry"
 
 // RegistryLocations returns the effective registries to search, in order:
 // the explicit `registries` list, else the legacy single `registry_url`, else
@@ -106,8 +106,8 @@ type Database struct {
 	Path    string `toml:"path"`    // file path (sqlite) or DSN (postgres)
 }
 
-// ServerConfig configures the `cganno server` REST annotate service (the
-// [server] block). Optional — only consulted when `cganno server` runs. Tokens
+// ServerConfig configures the `varhub server` REST annotate service (the
+// [server] block). Optional — only consulted when `varhub server` runs. Tokens
 // authenticating the /v1 API are HMAC-signed with MasterKey; a valid one is
 // printed to stdout at startup. Jobs and results persist in DB (its own SQLite
 // database, separate from the annotation cache).
@@ -116,7 +116,7 @@ type ServerConfig struct {
 	MasterKey    string `toml:"master_key,omitempty"`    // HMAC signing key for API tokens (required unless require_token=false)
 	RequireToken *bool  `toml:"require_token,omitempty"` // require a bearer token on /v1 (default true; false = open, tokenless public API)
 	Workers      int    `toml:"workers,omitempty"`       // async worker pool size (default 1)
-	DB           string `toml:"db,omitempty"`            // job-queue SQLite path (default "cganno_server.db")
+	DB           string `toml:"db,omitempty"`            // job-queue SQLite path (default "varhub_server.db")
 
 	// Large-job performance.
 	MaxChunkVariants *int `toml:"max_chunk_variants,omitempty"` // variant-count chunk size for a job (default 2000; explicit 0 disables chunking)
@@ -200,7 +200,7 @@ type Reference struct {
 
 // ReferenceFor returns the reference FASTA configured for an assembly (from
 // `[references.<assembly>]`), or "" if none. Config values are already
-// $CGANNO_HOME-expanded at Load time.
+// $VARHUB_HOME-expanded at Load time.
 func (c *Config) ReferenceFor(assembly string) string {
 	return c.References[assembly].Fasta
 }
@@ -331,13 +331,13 @@ type Source struct {
 	GTFRef *Source `toml:"-"` // resolved referenced GTF source (set at snapshot load)
 
 	// Build, when set, produces this source's data file from a download+preprocess
-	// recipe instead of a ready-to-use url/localpath. Run once by `cganno download`
+	// recipe instead of a ready-to-use url/localpath. Run once by `varhub download`
 	// and cached. Mutually exclusive with url/localpath/files/chroms.
 	Build *SourceBuild `toml:"build,omitempty"`
 
 	// Requires lists external executables that must be on PATH for this source's
 	// build recipe (or type="tool" steps) to run (e.g. "python3", "unzip"). Checked
-	// by `cganno download`/`cganno annotate`. Irrelevant for plain (non-build) sources.
+	// by `varhub download`/`varhub annotate`. Irrelevant for plain (non-build) sources.
 	Requires []string `toml:"requires,omitempty"`
 
 	// --- type="tool" only: an external annotator run per-query (see AsTool) -------
@@ -505,7 +505,7 @@ func (s Source) AsTool() Tool {
 // SourceBuild is a preprocessing recipe that produces a source's data file — for
 // sources that need significant prep (e.g. REVEL: download many CSV zips, convert,
 // merge, index). Because it lives in the fragment, such a source is self-contained
-// and registry-shareable. `cganno download` fetches Inputs + Assets into a scratch
+// and registry-shareable. `varhub download` fetches Inputs + Assets into a scratch
 // workdir, runs the Run steps (which must write {output}), then caches + indexes
 // the result. Step placeholders: {workdir} {inputs} {output} {threads}.
 type SourceBuild struct {
@@ -678,14 +678,14 @@ type Tool struct {
 	RefCol      int    `toml:"ref_col,omitempty"`      // tab output: 1-based REF column
 	AltCol      int    `toml:"alt_col,omitempty"`      // tab output: 1-based ALT column
 
-	// Setup runs once after the image is acquired (`cganno download`) to install the
+	// Setup runs once after the image is acquired (`varhub download`) to install the
 	// tool's data into its data dir ({datadir}, bound into container steps).
 	Setup   []Step `toml:"setup,omitempty"`
 	Threads int    `toml:"threads,omitempty"` // per-run CPU count → {threads} (e.g. vep --fork)
 	Steps   []Step `toml:"steps"`
 
 	// Requires lists external executables that must be on PATH for this tool to
-	// run (e.g. "python3", "bgzip"). Checked by `cganno download` and `cganno
+	// run (e.g. "python3", "bgzip"). Checked by `varhub download` and `varhub
 	// annotate` before any step runs. The container engine is checked
 	// automatically when the tool uses a container — see RequiredSoftware.
 	Requires []string `toml:"requires,omitempty"`
@@ -965,7 +965,7 @@ func (snap *Snapshot) DropSource(name string) int {
 }
 
 // Load reads and validates the global config.toml. Values may reference
-// $CGANNO_HOME / ${CGANNO_HOME}, which is expanded to the CGANNO_HOME env var
+// $VARHUB_HOME / ${VARHUB_HOME}, which is expanded to the VARHUB_HOME env var
 // (or "." when unset) before decoding. Other $NAME sequences are left intact.
 func Load(path string) (*Config, error) {
 	var c Config
@@ -973,12 +973,12 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	home := os.Getenv("CGANNO_HOME")
+	home := os.Getenv("VARHUB_HOME")
 	if home == "" {
 		home = "."
 	}
 	expand := func(name string) string {
-		if name == "CGANNO_HOME" {
+		if name == "VARHUB_HOME" {
 			return home
 		}
 		return "${" + name + "}" // leave other vars intact
@@ -990,19 +990,19 @@ func Load(path string) (*Config, error) {
 		c.dir = filepath.Dir(abs)
 	}
 	// The cache is optional: an absent [database] leaves the backend empty (disabled),
-	// so no cganno.db is created. Only a configured backend defaults its path.
+	// so no varhub.db is created. Only a configured backend defaults its path.
 	if c.Database.Backend == "sqlite" && c.Database.Path == "" {
-		c.Database.Path = "cganno.db"
+		c.Database.Path = "varhub.db"
 	}
 	if c.AnnotationsDir == "" {
 		c.AnnotationsDir = "annotations"
 	}
-	// Server defaults (the [server] block is optional; only used by `cganno server`).
+	// Server defaults (the [server] block is optional; only used by `varhub server`).
 	if c.Server.Workers <= 0 {
 		c.Server.Workers = 1
 	}
 	if c.Server.DB == "" {
-		c.Server.DB = "cganno_server.db"
+		c.Server.DB = "varhub_server.db"
 	}
 	if c.Server.MaxJobsPerIP == 0 {
 		c.Server.MaxJobsPerIP = 2
@@ -1437,7 +1437,7 @@ func (c *Config) resolveDir(d string) string {
 // DataDirAbs is data_dir resolved relative to the config file.
 func (c *Config) DataDirAbs() string { return c.resolveDir(c.DataDir) }
 
-// DatabasePathAbs is database.path resolved relative to CGANNO_HOME (the config
+// DatabasePathAbs is database.path resolved relative to VARHUB_HOME (the config
 // dir) for sqlite; an absolute path or a postgres DSN is returned unchanged.
 func (c *Config) DatabasePathAbs() string {
 	if c.Database.Backend != "sqlite" {
@@ -1447,7 +1447,7 @@ func (c *Config) DatabasePathAbs() string {
 }
 
 // ServerDBPathAbs is the server job-queue database path resolved relative to
-// CGANNO_HOME (the config dir); an absolute path is returned unchanged.
+// VARHUB_HOME (the config dir); an absolute path is returned unchanged.
 func (c *Config) ServerDBPathAbs() string { return c.resolveDir(c.Server.DB) }
 
 // CacheDirAbs is the source-file cache directory resolved relative to the config
@@ -1467,7 +1467,7 @@ func (c *Config) CacheDirAbs() string {
 // ResolveSourcePath returns the on-disk path to a source's data file. A LocalPath
 // (absolute, or relative to data_dir) wins — the file is used exactly. Otherwise
 // the file is cached under cache_dir keyed by name/version. Environment variables
-// in a localpath (`$VAR` / `${VAR}`, incl. $CGANNO_HOME) are expanded here at
+// in a localpath (`$VAR` / `${VAR}`, incl. $VARHUB_HOME) are expanded here at
 // resolve time, so the raw value stays in the fragment file.
 func (c *Config) ResolveSourcePath(s Source) string {
 	if s.LocalPath != "" {
@@ -1484,7 +1484,7 @@ func (c *Config) ResolveSourcePath(s Source) string {
 }
 
 // ResolveGTFIndexPath is the canonical on-disk location for a GTF source's
-// bgzipped + tabix-indexed form, under cache_dir keyed by name/version. cganno
+// bgzipped + tabix-indexed form, under cache_dir keyed by name/version. varhub
 // builds it once (at download, or lazily on first annotate) so the gene model can
 // be queried by position instead of loaded whole into memory.
 func (c *Config) ResolveGTFIndexPath(s Source) string {
@@ -1537,7 +1537,7 @@ func (c *Config) ResolveToolData(t Tool) string {
 // MustExist returns a helpful error if the config file is missing.
 func MustExist(path string) error {
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("config file %s not found (run `cganno init`)", path)
+		return fmt.Errorf("config file %s not found (run `varhub init`)", path)
 	}
 	return nil
 }
@@ -1553,8 +1553,8 @@ func ReadFragment(path string) (*Snapshot, error) {
 	return snap, nil
 }
 
-// ReadConfigFile decodes config.toml WITHOUT expanding $CGANNO_HOME, so the raw
-// values (e.g. "$CGANNO_HOME/data") round-trip when edited and rewritten. Use Load
+// ReadConfigFile decodes config.toml WITHOUT expanding $VARHUB_HOME, so the raw
+// values (e.g. "$VARHUB_HOME/data") round-trip when edited and rewritten. Use Load
 // for a resolved, validated config to run against.
 func ReadConfigFile(path string) (*Config, error) {
 	var c Config

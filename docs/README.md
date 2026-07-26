@@ -1,6 +1,6 @@
-# cganno documentation
+# VariantHub documentation
 
-`cganno` annotates VCF files and bare loci against a *versioned* bundle of reference
+`varhub` annotates VCF files and bare loci against a *versioned* bundle of reference
 sources, caching results so repeat work is instant. It's a single static Go binary —
 no interpreter, no cache-install dance, no database server.
 
@@ -19,10 +19,10 @@ This directory documents how the system is put together and how to use it.
   read values.
 - **[Source & tool lifecycle](lifecycle.md)** — download / build / tool image-acquire
   + one-time setup, and per-run pre/post-processing steps (container vs host,
-  placeholders, the `/cganno/*` mount contract). Includes the built-in
+  placeholders, the `/varhub/*` mount contract). Includes the built-in
   `bgzip`/`tabix` helpers.
 - **[Input & output formats](io-formats.md)** — how variants are handed *in* (loci or
-  a VCF; a tool's `input_format`) and how results come *out* (`cganno annotate
+  a VCF; a tool's `input_format`) and how results come *out* (`varhub annotate
   --format tab|vcf|json|text`; a tool's output `format`).
 - **[Parallel & distributed annotation](parallel.md)** — annotating large VCFs in parallel:
   the `-t N` source fan-out, and a job-array scatter/gather (`cgkit vcf-split` →
@@ -40,14 +40,14 @@ This directory documents how the system is put together and how to use it.
 - A **snapshot** (`snapshots/<name>.toml`) is a manifest that lists the sources it
   includes (by `name:version`) plus its `assembly` and `default_annotations`. The
   snapshot name is the version stamped on every result.
-- An **annotation** is a declared output field nested under a source; `cganno annotate`
+- An **annotation** is a declared output field nested under a source; `varhub annotate`
   applies a selected set and prints/writes the values.
 
 ```sh
-cganno init                                   # scaffold config + a starter snapshot
-cganno source add --name gnomad --version 4.1 --url … --format vcf --snapshot 2026-07
-cganno download                               # fetch + index the snapshot's sources
-cganno annotate chr1:115256529:T:C            # → TSV of the default annotations
+varhub init                                   # scaffold config + a starter snapshot
+varhub source add --name gnomad --version 4.1 --url … --format vcf --snapshot 2026-07
+varhub download                               # fetch + index the snapshot's sources
+varhub annotate chr1:115256529:T:C            # → TSV of the default annotations
 ```
 
 See the **[Quick start](quickstart.md)** for the full walkthrough.

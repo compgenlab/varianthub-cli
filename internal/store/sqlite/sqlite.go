@@ -10,8 +10,8 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 
-	"github.com/compgenlab/cganno/internal/model"
-	"github.com/compgenlab/cganno/internal/store"
+	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 // chunk caps how many loci go into one IN-list (4 bound vars each).

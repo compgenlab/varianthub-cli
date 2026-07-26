@@ -9,7 +9,7 @@ import (
 
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // geneListAnnotator flags a variant when the gene overlapping it (per a referenced

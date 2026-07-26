@@ -19,7 +19,7 @@ const formHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cganno — annotate variants</title>
+<title>VariantHub — annotate variants</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 900px; }
   h1 { font-size: 1.3rem; }
@@ -45,7 +45,7 @@ const formHTML = `<!doctype html>
 </style>
 </head>
 <body>
-<h1>cganno — annotate variants</h1>
+<h1>VariantHub — annotate variants</h1>
 <p id="snapshot-info" class="hint"></p>
 
 <form id="form">
@@ -336,9 +336,9 @@ function toDelimited(variants, sep) {
 document.querySelectorAll('input[name=mode]').forEach(el => el.addEventListener('change', showMode));
 $('sel-all').addEventListener('click', () => document.querySelectorAll('.annbox').forEach(cb => cb.checked = true));
 $('sel-none').addEventListener('click', () => document.querySelectorAll('.annbox').forEach(cb => cb.checked = false));
-$('dl-json').addEventListener('click', () => lastVariants && download('cganno.json', JSON.stringify(lastVariants, null, 2), 'application/json'));
-$('dl-csv').addEventListener('click', () => lastVariants && download('cganno.csv', toDelimited(lastVariants, ','), 'text/csv'));
-$('dl-tsv').addEventListener('click', () => lastVariants && download('cganno.tsv', toDelimited(lastVariants, '\t'), 'text/tab-separated-values'));
+$('dl-json').addEventListener('click', () => lastVariants && download('varhub.json', JSON.stringify(lastVariants, null, 2), 'application/json'));
+$('dl-csv').addEventListener('click', () => lastVariants && download('varhub.csv', toDelimited(lastVariants, ','), 'text/csv'));
+$('dl-tsv').addEventListener('click', () => lastVariants && download('varhub.tsv', toDelimited(lastVariants, '\t'), 'text/tab-separated-values'));
 
 $('form').addEventListener('submit', async (e) => {
   e.preventDefault();

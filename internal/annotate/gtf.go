@@ -10,8 +10,8 @@ import (
 	"github.com/compgenlab/cghts/gtf"
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/fetch"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/fetch"
 )
 
 // geneModel is the query surface an annotator needs from a GTF gene model, served
@@ -81,7 +81,7 @@ func newGTFAnnotator(cfg *config.Config, src config.Source, fields []gtfField) (
 
 func warnUnindexedGTF(src config.Source, err error) {
 	fmt.Fprintf(os.Stderr,
-		"cganno: GTF %s: no usable tabix index (%v) — loading the whole file into memory (high RAM); run `cganno download` to build the index\n",
+		"varhub: GTF %s: no usable tabix index (%v) — loading the whole file into memory (high RAM); run `varhub download` to build the index\n",
 		src.ID(), err)
 }
 

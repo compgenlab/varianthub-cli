@@ -1,4 +1,4 @@
-module github.com/compgenlab/cganno
+module github.com/compgenlab/varianthub-cli
 
 go 1.25.0
 

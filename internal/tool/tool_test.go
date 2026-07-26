@@ -9,10 +9,10 @@ import (
 
 	"github.com/compgenlab/cghts/htsio/tabix"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
-// TestContainerMapping: a container step binds each host dir to a fixed /cganno/*
+// TestContainerMapping: a container step binds each host dir to a fixed /varhub/*
 // mountpoint and renders the placeholders to those in-container paths (host-
 // independent, so the engine never recreates a deep host path inside the image).
 func TestContainerMapping(t *testing.T) {
@@ -22,26 +22,26 @@ func TestContainerMapping(t *testing.T) {
 	inDir := t.TempDir()
 	p := Params{
 		Datadir: "/home/u/deep/cache/tools/vep/113",
-		Workdir: "/tmp/cganno-xyz",
+		Workdir: "/tmp/varhub-xyz",
 		Ref:     filepath.Join(refDir, "GRCh38.fa"),
 		Input:   filepath.Join(inDir, "in.vcf"),
-		Output:  "/tmp/cganno-xyz/vep.vcf.gz",
+		Output:  "/tmp/varhub-xyz/vep.vcf.gz",
 		Image:   "/img/vep.sif",
 	}
 	repl, binds := containerMapping(config.Tool{}, p)
 
 	wantBinds := []string{
-		"-B", "/home/u/deep/cache/tools/vep/113:/cganno/data",
-		"-B", "/tmp/cganno-xyz:/cganno/work",
-		"-B", refDir + ":/cganno/ref",
-		"-B", inDir + ":/cganno/in",
+		"-B", "/home/u/deep/cache/tools/vep/113:/varhub/data",
+		"-B", "/tmp/varhub-xyz:/varhub/work",
+		"-B", refDir + ":/varhub/ref",
+		"-B", inDir + ":/varhub/in",
 	}
 	if strings.Join(binds, " ") != strings.Join(wantBinds, " ") {
 		t.Errorf("binds = %v\nwant %v", binds, wantBinds)
 	}
 
 	got := repl.Replace("vep -i {input} -o {output} --dir_cache {datadir} --fasta {ref} --work {workdir}")
-	want := "vep -i /cganno/in/in.vcf -o /cganno/work/vep.vcf.gz --dir_cache /cganno/data --fasta /cganno/ref/GRCh38.fa --work /cganno/work"
+	want := "vep -i /varhub/in/in.vcf -o /varhub/work/vep.vcf.gz --dir_cache /varhub/data --fasta /varhub/ref/GRCh38.fa --work /varhub/work"
 	if got != want {
 		t.Errorf("render =\n %q\nwant\n %q", got, want)
 	}
@@ -59,15 +59,15 @@ func TestContainerMappingMissingRef(t *testing.T) {
 	}
 	repl, binds := containerMapping(config.Tool{}, p)
 	for _, b := range binds {
-		if strings.Contains(b, "/cganno/ref") {
+		if strings.Contains(b, "/varhub/ref") {
 			t.Errorf("missing ref dir should not be bound, got %v", binds)
 		}
 	}
-	if got := repl.Replace("INSTALL.pl -c {datadir}"); got != "INSTALL.pl -c /cganno/data" {
+	if got := repl.Replace("INSTALL.pl -c {datadir}"); got != "INSTALL.pl -c /varhub/data" {
 		t.Errorf("setup render = %q", got)
 	}
 	// {ref} still maps to the in-container path (a step that uses it fails clearly).
-	if got := repl.Replace("--fasta {ref}"); got != "--fasta /cganno/ref/GRCh38.fa" {
+	if got := repl.Replace("--fasta {ref}"); got != "--fasta /varhub/ref/GRCh38.fa" {
 		t.Errorf("ref render = %q", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestContainerMappingMissingRef(t *testing.T) {
 // TestContainerMappingRelativeInput: a RELATIVE input path (e.g. an input VCF given
 // as `sub/dir/in.vcf.gz`) must bind an ABSOLUTE host dir. The container engine
 // resolves a relative -B source against its own CWD (the tool workdir), not
-// cganno's, so a relative bind would mount a path that doesn't exist there.
+// varhub's, so a relative bind would mount a path that doesn't exist there.
 func TestContainerMappingRelativeInput(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
@@ -92,7 +92,7 @@ func TestContainerMappingRelativeInput(t *testing.T) {
 	}
 	_, binds := containerMapping(config.Tool{}, p)
 	joined := strings.Join(binds, " ")
-	want := "-B " + filepath.Join(cwd, "sub", "dir") + ":/cganno/in"
+	want := "-B " + filepath.Join(cwd, "sub", "dir") + ":/varhub/in"
 	if !strings.Contains(joined, want) {
 		t.Errorf("relative input must bind an ABSOLUTE host dir;\n want %q\n in   %q", want, joined)
 	}
@@ -226,7 +226,7 @@ func TestMissingAssets(t *testing.T) {
 		Assets: []string{"expand_vep_vcf.py"}, // declared
 		Steps: []config.Step{
 			{Run: "vep -i {input} -o {workdir}/vep.vcf --fasta {ref}"}, // produces vep.vcf
-			{Run: "python3 {workdir}/expand_vep_vcf.py < {workdir}/vep.vcf | python3 {workdir}/worst.py | cganno bgzip > {output}"},
+			{Run: "python3 {workdir}/expand_vep_vcf.py < {workdir}/vep.vcf | python3 {workdir}/worst.py | varhub bgzip > {output}"},
 		},
 	}
 	got := missingAssets(tl, tl.Steps)

@@ -7,7 +7,7 @@ package annotator
 import (
 	"context"
 
-	"github.com/compgenlab/cganno/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/model"
 )
 
 // Annotator computes annotation rows for a set of loci. Implementations must be

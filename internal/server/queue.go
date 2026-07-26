@@ -201,7 +201,7 @@ func (q *Queue) Enqueue(ctx context.Context, j NewJob) (string, error) {
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
-	log.Printf("cganno server: job %s queued (kind=%s, ip=%s, session=%s, selection=%q, %d bytes)",
+	log.Printf("varhub server: job %s queued (kind=%s, ip=%s, session=%s, selection=%q, %d bytes)",
 		id, j.Kind, j.ClientIP, j.Session, j.Selection, len(j.Body))
 	q.poke()
 	return id, nil
@@ -391,9 +391,9 @@ func (q *Queue) StartSweeper(ctx context.Context, ttl, interval time.Duration) {
 		sweep := func() {
 			cutoff := q.nowFn() - int64(ttl.Seconds())
 			if n, err := q.DeleteOlderThan(ctx, cutoff); err != nil {
-				log.Printf("cganno server: job GC: %v", err)
+				log.Printf("varhub server: job GC: %v", err)
 			} else if n > 0 {
-				log.Printf("cganno server: job GC removed %d job(s) older than %s", n, ttl)
+				log.Printf("varhub server: job GC removed %d job(s) older than %s", n, ttl)
 			}
 		}
 		sweep()
@@ -437,7 +437,7 @@ func (q *Queue) worker(ctx context.Context, runner Runner) {
 			}
 			job, input, ok, err := q.claimNext(ctx)
 			if err != nil {
-				log.Printf("cganno server: claim job: %v", err)
+				log.Printf("varhub server: claim job: %v", err)
 				break
 			}
 			if !ok {
@@ -510,38 +510,38 @@ func (q *Queue) claimNext(ctx context.Context) (Job, []byte, bool, error) {
 // process runs the job's runner and records its outcome.
 func (q *Queue) process(ctx context.Context, job Job, input []byte, runner Runner) {
 	start := time.Now()
-	log.Printf("cganno server: job %s running (kind=%s, ip=%s)", job.ID, job.Kind, job.ClientIP)
+	log.Printf("varhub server: job %s running (kind=%s, ip=%s)", job.ID, job.Kind, job.ClientIP)
 	result, nVar, err := runner(ctx, job, input)
 	if err != nil {
-		log.Printf("cganno server: job %s failed after %s: %v", job.ID, time.Since(start).Round(time.Millisecond), err)
+		log.Printf("varhub server: job %s failed after %s: %v", job.ID, time.Since(start).Round(time.Millisecond), err)
 		if _, uerr := q.db.ExecContext(ctx,
 			`UPDATE job SET status=?, error=?, finished_at=? WHERE id=?`,
 			StatusError, err.Error(), q.nowFn(), job.ID); uerr != nil {
-			log.Printf("cganno server: mark job %s errored: %v", job.ID, uerr)
+			log.Printf("varhub server: mark job %s errored: %v", job.ID, uerr)
 		}
 		return
 	}
 	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("cganno server: store job %s result: %v", job.ID, err)
+		log.Printf("varhub server: store job %s result: %v", job.ID, err)
 		return
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO job_result(job_id,json) VALUES(?,?)
 		 ON CONFLICT(job_id) DO UPDATE SET json=excluded.json`, job.ID, string(result)); err != nil {
-		log.Printf("cganno server: store job %s result: %v", job.ID, err)
+		log.Printf("varhub server: store job %s result: %v", job.ID, err)
 		return
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE job SET status=?, n_variants=?, finished_at=? WHERE id=?`,
 		StatusDone, nVar, q.nowFn(), job.ID); err != nil {
-		log.Printf("cganno server: finish job %s: %v", job.ID, err)
+		log.Printf("varhub server: finish job %s: %v", job.ID, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("cganno server: commit job %s: %v", job.ID, err)
+		log.Printf("varhub server: commit job %s: %v", job.ID, err)
 		return
 	}
-	log.Printf("cganno server: job %s done (%d variant(s) in %s)", job.ID, nVar, time.Since(start).Round(time.Millisecond))
+	log.Printf("varhub server: job %s done (%d variant(s) in %s)", job.ID, nVar, time.Since(start).Round(time.Millisecond))
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 func mkdirWrite(path, body string) error {
@@ -141,16 +141,16 @@ func TestSubmitIssue(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		json.NewDecoder(r.Body).Decode(&payload)
 		w.WriteHeader(http.StatusCreated)
-		io.WriteString(w, `{"html_url":"https://github.com/compgenlab/cganno-public-data-registry/issues/7"}`)
+		io.WriteString(w, `{"html_url":"https://github.com/compgenlab/varianthub-public-data-registry/issues/7"}`)
 	}))
 	defer ts.Close()
 
 	s := GitHubSubmitter{Token: "tok123", APIBase: ts.URL}
-	url, err := s.SubmitIssue(context.Background(), "compgenlab/cganno-public-data-registry", "title", "body")
+	url, err := s.SubmitIssue(context.Background(), "compgenlab/varianthub-public-data-registry", "title", "body")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPath != "/repos/compgenlab/cganno-public-data-registry/issues" {
+	if gotPath != "/repos/compgenlab/varianthub-public-data-registry/issues" {
 		t.Errorf("path = %q", gotPath)
 	}
 	if gotAuth != "Bearer tok123" {

@@ -1,4 +1,4 @@
-# Built-in annotators — cganno's self-contained "built-in tool calls" (hts, no data
+# Built-in annotators — varhub's self-contained "built-in tool calls" (hts, no data
 # file). One source of `type = "builtin"` holds them; each annotation names its
 # builtin and the output `name` its value appears under.
 #   variant-only   (from chrom/pos/ref/alt; run on any path, incl. bare loci):

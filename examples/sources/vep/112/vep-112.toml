@@ -1,5 +1,5 @@
 # A type="tool" source (VEP): a containerized annotator whose output is consumed as a
-# source. `cganno download` acquires the `image` (a docker:// ref is pulled; a .sif URL
+# source. `varhub download` acquires the `image` (a docker:// ref is pulled; a .sif URL
 # is downloaded) and runs [[sources.setup]] once to install the tool's data into its
 # persistent data dir ({datadir}, at cache/tools/<name>/<version>/).
 #
@@ -13,9 +13,9 @@
 # (e.g. "{chrom}\t{pos}\t{ref}\t{alt}") is used for tools that take a variant list.
 #
 # Container steps (container = true) run with --no-home and resolve placeholders to
-# FIXED in-container mountpoints, independent of the host layout (cganno binds the
-# host dirs to them): {datadir}->/cganno/data, {workdir}->/cganno/work,
-# {ref}->/cganno/ref/<file>, {input}->/cganno/in/<file>, {output}->/cganno/work/<file>.
+# FIXED in-container mountpoints, independent of the host layout (varhub binds the
+# host dirs to them): {datadir}->/varhub/data, {workdir}->/varhub/work,
+# {ref}->/varhub/ref/<file>, {input}->/varhub/in/<file>, {output}->/varhub/work/<file>.
 # So `INSTALL.pl -c {datadir}` is portable on any machine. Host steps
 # (container = false) keep real host paths; the workdir is shared between the two.
 #
@@ -27,11 +27,11 @@
 # output for the same input across runs).
 # Bump `version` whenever the image, setup, or steps change — that invalidates the cache.
 #
-# `requires` lists host executables that must be on PATH; `cganno download` and
-# `cganno annotate` check them up front and fail fast if any is missing. The
+# `requires` lists host executables that must be on PATH; `varhub download` and
+# `varhub annotate` check them up front and fail fast if any is missing. The
 # container engine (apptainer) is checked automatically, so it need not be listed.
 # Here python3 is needed because the post-processing step runs on the host
-# (container = false), outside the VEP image (bgzip is provided by `cganno bgzip`).
+# (container = false), outside the VEP image (bgzip is provided by `varhub bgzip`).
 #
 # VEP emits a VCF, so format = "vcf": the output is consumed like a vcf source and
 # each annotation pulls an INFO id from it (`field` = the INFO tag in the VEP output,
@@ -42,13 +42,13 @@
 type     = "tool"
 name     = "vep"
 version  = "112"
-image    = "docker://ensemblorg/ensembl-vep"  # pulled by `cganno download` (or a downloadable .sif URL)
+image    = "docker://ensemblorg/ensembl-vep"  # pulled by `varhub download` (or a downloadable .sif URL)
 engine   = "apptainer"                         # or "singularity"
 format   = "vcf"                               # VEP output is a VCF; pull INFO values from it
 # input_format = "vcf"                          # default; a template feeds a variant-list tool
 output   = "vep.vcf.gz"
 threads  = 4                                   # → {threads} (vep --fork 4)
-requires = ["python3"]                         # host deps (bgzip via `cganno bgzip`, no external binary)
+requires = ["python3"]                         # host deps (bgzip via `varhub bgzip`, no external binary)
 # Helper scripts co-located with this .toml: staged into {workdir} before each run and
 # referenced as {workdir}/<name> below. Declaring them lets the registry bundle them.
 assets   = ["expand_vep_vcf.py", "vep_vcf_worst_consequence.py"]
@@ -66,7 +66,7 @@ assets   = ["expand_vep_vcf.py", "vep_vcf_worst_consequence.py"]
   [[sources.steps]]                            # 2) host post-process: expand/rename INFO, pick worst → bgzipped VCF
   name      = "postprocess"
   container = false
-  run = "python3 {workdir}/expand_vep_vcf.py < {workdir}/vep.vcf | python3 {workdir}/vep_vcf_worst_consequence.py | cganno bgzip > {output}"
+  run = "python3 {workdir}/expand_vep_vcf.py < {workdir}/vep.vcf | python3 {workdir}/vep_vcf_worst_consequence.py | varhub bgzip > {output}"
 
   # One [[sources.annotations]] per INFO id to pull from the post-processed VCF.
   # `field` must match the INFO tag your scripts emit; `name` is what gets written.

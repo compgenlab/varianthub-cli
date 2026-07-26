@@ -275,7 +275,7 @@ func TestGeneListUnknownGTFRejected(t *testing.T) {
 
 func TestGeneSetInlineAndFile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "data_dir = \"data\"\nannotations_dir = \"ann\"\n")
 	cfg, err := Load(path)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestGeneSetInlineAndFile(t *testing.T) {
 
 func TestResolveSourceFiles(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndata_dir = \"data\"\n")
 	cfg, err := Load(path)
 	if err != nil {
@@ -408,7 +408,7 @@ func writeSnapshot(t *testing.T, dir, snap, frag, body string) {
 
 func TestLoadAndSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, `
 assembly = "GRCh38"
 data_dir = "data"
@@ -435,7 +435,7 @@ localpath = "clinvar/clinvar.vcf.gz"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Database.Backend != "sqlite" || cfg.Database.Path != "cganno.db" {
+	if cfg.Database.Backend != "sqlite" || cfg.Database.Path != "varhub.db" {
 		t.Errorf("defaults wrong: %+v", cfg.Database)
 	}
 
@@ -505,19 +505,19 @@ func TestLocalPathEnvExpansion(t *testing.T) {
 	}
 }
 
-func TestLoadInterpolatesCgannoHome(t *testing.T) {
+func TestLoadInterpolatesVarhubHome(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
 assembly = "GRCh38"
-data_dir = "$CGANNO_HOME/data"
+data_dir = "$VARHUB_HOME/data"
 [database]
 backend = "sqlite"
-path = "${CGANNO_HOME}/cganno.db"
+path = "${VARHUB_HOME}/varhub.db"
 [references.GRCh38]
 fasta = "$KEEP_ME/ref.fa"
 `)
 
-	t.Setenv("CGANNO_HOME", "/home/x")
+	t.Setenv("VARHUB_HOME", "/home/x")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -525,18 +525,18 @@ fasta = "$KEEP_ME/ref.fa"
 	if cfg.DataDir != "/home/x/data" {
 		t.Errorf("data_dir = %q, want /home/x/data", cfg.DataDir)
 	}
-	if cfg.Database.Path != "/home/x/cganno.db" {
-		t.Errorf("database.path = %q, want /home/x/cganno.db", cfg.Database.Path)
+	if cfg.Database.Path != "/home/x/varhub.db" {
+		t.Errorf("database.path = %q, want /home/x/varhub.db", cfg.Database.Path)
 	}
 	if got := cfg.ReferenceFor("GRCh38"); got != "${KEEP_ME}/ref.fa" {
 		t.Errorf("fasta = %q, want ${KEEP_ME}/ref.fa", got)
 	}
 }
 
-func TestLoadCgannoHomeDefaultsToDot(t *testing.T) {
+func TestLoadVarhubHomeDefaultsToDot(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndata_dir = \"$CGANNO_HOME/data\"\n")
-	t.Setenv("CGANNO_HOME", "")
+	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndata_dir = \"$VARHUB_HOME/data\"\n")
+	t.Setenv("VARHUB_HOME", "")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -548,14 +548,14 @@ func TestLoadCgannoHomeDefaultsToDot(t *testing.T) {
 
 func TestDatabasePathAbs(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 
-	rel := writeConfig(t, dir, "assembly = \"GRCh38\"\n[database]\nbackend = \"sqlite\"\npath = \"cganno.db\"\n")
+	rel := writeConfig(t, dir, "assembly = \"GRCh38\"\n[database]\nbackend = \"sqlite\"\npath = \"varhub.db\"\n")
 	cfg, err := Load(rel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cfg.DatabasePathAbs(), filepath.Join(dir, "cganno.db"); got != want {
+	if got, want := cfg.DatabasePathAbs(), filepath.Join(dir, "varhub.db"); got != want {
 		t.Errorf("relative DatabasePathAbs = %q, want %q", got, want)
 	}
 
@@ -580,7 +580,7 @@ func TestDatabasePathAbs(t *testing.T) {
 // assembly — not pinned in the manifest.
 func TestSnapshotReferenceFromAssembly(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, `
 default_snapshot = "r"
 [references.GRCh38]
@@ -614,7 +614,7 @@ localpath = "x.vcf.gz"
 
 func TestSourceAssemblyVerification(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "default_snapshot = \"r\"\n[database]\nbackend = \"sqlite\"\n")
 
 	// Assembly is per-snapshot now: the manifest carries it (writeSnapshot preserves it).
@@ -653,7 +653,7 @@ localpath = "c.vcf.gz"
 
 func TestSourceChecksumSpecValidation(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndefault_snapshot = \"r\"\n[database]\nbackend = \"sqlite\"\n")
 	writeSnapshot(t, dir, "r", "01_x.toml", `
 [[sources]]
@@ -689,7 +689,7 @@ func TestRegistryLocations(t *testing.T) {
 
 func TestBuiltinSource(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndefault_snapshot = \"r\"\n[database]\nbackend = \"sqlite\"\n")
 
 	// A builtin source with valid builtins (incl. a parameterized one) loads.
@@ -727,7 +727,7 @@ type = "builtin"
 
 func TestGTFSource(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndefault_snapshot = \"r\"\n[database]\nbackend = \"sqlite\"\n")
 
 	// A gtf source selecting valid fields (case-insensitive) + gtf_tags loads.
@@ -811,7 +811,7 @@ func TestConfigOptionalAssemblyAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg2.CacheEnabled() || cfg2.Database.Path != "cganno.db" {
+	if !cfg2.CacheEnabled() || cfg2.Database.Path != "varhub.db" {
 		t.Errorf("cache should be enabled with default path: %+v", cfg2.Database)
 	}
 }
@@ -840,7 +840,7 @@ func TestFragmentRoundTrip(t *testing.T) {
 
 func TestLoadSnapshotParseErrors(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndefault_snapshot = \"r\"\n[database]\nbackend = \"sqlite\"\n")
 	cfg, err := Load(path)
 	if err != nil {
@@ -878,7 +878,7 @@ func TestLoadSnapshotParseErrors(t *testing.T) {
 
 func TestSourceBuild(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CGANNO_HOME", "")
+	t.Setenv("VARHUB_HOME", "")
 	path := writeConfig(t, dir, "assembly = \"GRCh38\"\ndata_dir = \"data\"\ndefault_snapshot = \"s\"\n[database]\nbackend = \"sqlite\"\n")
 	cfg, err := Load(path)
 	if err != nil {

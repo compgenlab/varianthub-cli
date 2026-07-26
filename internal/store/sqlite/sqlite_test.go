@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compgenlab/cganno/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/model"
 )
 
 func newTestStore(t *testing.T) *Store {

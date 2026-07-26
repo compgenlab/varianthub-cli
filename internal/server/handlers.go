@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/vcf"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/vcf"
 )
 
 // maxVCFUpload caps an uploaded VCF at 64 MiB (sites-only, so this is generous).
@@ -247,15 +247,15 @@ func (s *Server) handleAnnotateVCF(w http.ResponseWriter, r *http.Request) {
 	s.enqueue(w, r, KindVCF, selection, label, body)
 }
 
-const sessionCookie = "cganno_session"
+const sessionCookie = "varhub_session"
 
 // sessionID returns the requester's session id from its cookie (browser) or the
-// X-Cganno-Session header (API clients), or "" when there is none.
+// X-Varhub-Session header (API clients), or "" when there is none.
 func (s *Server) sessionID(r *http.Request) string {
 	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 		return c.Value
 	}
-	return strings.TrimSpace(r.Header.Get("X-Cganno-Session"))
+	return strings.TrimSpace(r.Header.Get("X-Varhub-Session"))
 }
 
 // ensureSession returns the requester's session id, minting one (Set-Cookie) if
@@ -430,7 +430,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleVersion reports the cganno build version.
+// handleVersion reports the varhub build version.
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
 }

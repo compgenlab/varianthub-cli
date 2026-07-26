@@ -1,24 +1,24 @@
 # Parallel & distributed annotation
 
-For `--format vcf`, cganno annotates a large VCF faster in two independent ways:
+For `--format vcf`, VariantHub annotates a large VCF faster in two independent ways:
 
 - **On one machine** — `-t N` fans the work out across annotation **sources**.
 - **Across many variants / to beat a huge source** — split the input into batches
-  **outside cganno** (with [cgkit](https://github.com/compgenlab/cgio-hts)) and run one
-  independent `cganno annotate` job per batch, on a scheduler or a shell loop.
+  **outside varhub** (with [cgkit](https://github.com/compgenlab/cgio-hts)) and run one
+  independent `varhub annotate` job per batch, on a scheduler or a shell loop.
 
-cganno deliberately does **not** split or concatenate VCFs itself: that is a job for the
-caller (a scheduler + cgkit), which keeps each cganno invocation a simple, single-input
+varhub deliberately does **not** split or concatenate VCFs itself: that is a job for the
+caller (a scheduler + cgkit), which keeps each varhub invocation a simple, single-input
 annotate.
 
-> This applies to VCF output only (`cganno annotate --format vcf`, the streaming pipeline). The
+> This applies to VCF output only (`varhub annotate --format vcf`, the streaming pipeline). The
 > individual-locus path (`--format tab|json|text`) parallelizes differently — it is memoized in
 > the cache and answers repeat loci instantly. See **[Annotation pathways](pathways.md)**.
 
 ## On one machine: `-t N` (source fan-out)
 
 `-t N` (`--threads N`) uses up to `N` workers; `-t 0` uses all CPUs; `-t 1` (default) is a single
-pass. With `-t N > 1`, cganno runs the **per-source fan-out**: one full pass per source over the
+pass. With `-t N > 1`, varhub runs the **per-source fan-out**: one full pass per source over the
 whole input, concurrently, then merges the parts positionally into the output.
 
 - Every builtin is grouped into a single whole-file job, so stream-stateful builtins like
@@ -28,7 +28,7 @@ whole input, concurrently, then merges the parts positionally into the output.
 - `--keep-temp` retains the temp part files for debugging.
 
 ```sh
-cganno annotate --all --format vcf -t 8 -o out.vcf.gz in.vcf.gz
+varhub annotate --all --format vcf -t 8 -o out.vcf.gz in.vcf.gz
 ```
 
 The catch: fan-out is **capped at the number of source jobs**. A single large *monolithic* source
@@ -43,14 +43,14 @@ variants**, and a few very large sources dominate the wall time — one big sour
 chromosome is a single long job that `-t N` cannot break up. Splitting the *variants* into batches
 divides that work — including those expensive lookups — evenly across independent jobs.
 
-cganno doesn't ship split/concat commands; the **scatter → annotate → gather** is done with
+varhub doesn't ship split/concat commands; the **scatter → annotate → gather** is done with
 **[cgkit](https://github.com/compgenlab/cgio-hts)** (`cgkit vcf-split` / `cgkit vcf-concat`), which
 does variant-count splitting and a coordinate-sorted, header-unioning concat:
 
 ```sh
 cgkit vcf-split in.vcf.gz --out work/part --num 100000       # → work/part.1.vcf.gz, part.2.vcf.gz, …
 # one independent job per batch i:
-cganno annotate --all --format vcf work/part.$i.vcf.gz -o work/part.$i.ann.vcf.gz
+varhub annotate --all --format vcf work/part.$i.vcf.gz -o work/part.$i.ann.vcf.gz
 cgkit vcf-concat --chunks work/part.1.ann.vcf.gz -o out.vcf.gz   # walk the numbered sequence, merge
 ```
 
@@ -86,9 +86,9 @@ sbatch --array=1-$N annotate_chunk.sbatch
 #!/bin/bash
 #SBATCH -c 4                                   # cores per batch (optional; see below)
 set -euo pipefail
-export CGANNO_HOME=/path/to/cganno
+export VARHUB_HOME=/path/to/varhub
 i="$SLURM_ARRAY_TASK_ID"
-cganno annotate --all --format vcf -t 4 \
+varhub annotate --all --format vcf -t 4 \
   "$SCRATCH/chunks/part.$i.vcf.gz" \
   -o "$SCRATCH/chunks/part.$i.ann.vcf.gz"
 ```
@@ -107,7 +107,7 @@ out across sources *within* its batch on its node.
 ```sh
 cgkit vcf-split in.vcf.gz --out work/part --num 100000
 ls work/part.*.vcf.gz | xargs -P8 -I{} sh -c \
-  'cganno annotate --all --format vcf "{}" -o "${1%.vcf.gz}.ann.vcf.gz"' _ {}
+  'varhub annotate --all --format vcf "{}" -o "${1%.vcf.gz}.ann.vcf.gz"' _ {}
 cgkit vcf-concat --chunks work/part.1.ann.vcf.gz -o out.vcf.gz
 ```
 
@@ -121,13 +121,13 @@ is per-record and batches cleanly.
 
 ## Recombining a hand-distributed per-source run
 
-If instead of splitting variants you distribute **one `cganno annotate -a <source>` pass per
+If instead of splitting variants you distribute **one `varhub annotate -a <source>` pass per
 source** across a cluster (each producing the same records with different INFO/FORMAT), recombine
-the per-source parts with `cganno vcf-merge` — a *column* combine of parts holding the **same**
+the per-source parts with `varhub vcf-merge` — a *column* combine of parts holding the **same**
 records in the same order:
 
 ```sh
-cganno vcf-merge -o out.vcf.gz part.A.vcf.gz part.B.vcf.gz …
+varhub vcf-merge -o out.vcf.gz part.A.vcf.gz part.B.vcf.gz …
 ```
 
 This is different from the batch gather above (`cgkit vcf-concat`, which recombines **disjoint**

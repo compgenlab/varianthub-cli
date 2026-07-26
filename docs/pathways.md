@@ -1,6 +1,6 @@
 # Annotation pathways
 
-`cganno annotate` has **two internal pathways**. Which one runs is decided by the output
+`varhub annotate` has **two internal pathways**. Which one runs is decided by the output
 `--format`, and they differ in what they can compute, whether samples are visible, how tools run,
 and whether results are cached. Understanding the split explains why a few annotations are
 "VCF-only" and why the cache behaves the way it does.
@@ -57,7 +57,7 @@ The cache (the optional `[database]` block; see **[Overview](overview.md#the-cac
 rebuildable memo keyed by **assembly + locus + source `name:version`**. It keys on the *locus*, not
 the annotation set: once a locus is cached it is treated as fully annotated, so an annotation you
 add later won't appear for an already-cached locus until you query a fresh one or delete the cache.
-Deleting `cganno.db` is always safe. Omit `[database]` entirely to compute without persisting.
+Deleting `varhub.db` is always safe. Omit `[database]` entirely to compute without persisting.
 
 ## Choosing a pathway
 

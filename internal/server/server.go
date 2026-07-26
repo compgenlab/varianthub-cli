@@ -1,9 +1,24 @@
-// Package server implements the `cganno server` async REST annotation service.
+// Package server implements the `varhub server` async REST annotation service.
 // It exposes the same annotation engine as the CLI over HTTP: a request submits a
 // locus (or an uploaded VCF) and is queued; a worker pool annotates it; the client
 // polls by job id and fetches JSON results. The /v1 API is authenticated with
 // HMAC bearer tokens (see auth.go); a browser form and its /ui/* endpoints are
 // open. Jobs and results persist in a dedicated SQLite database (see queue.go).
+//
+// Extraction note: this package is slated to move to a separate project. The seam
+// is already narrow, so the boundary is worth preserving as it stands.
+//
+//   - In-edges: exactly one — cmd/varhub/servercmd.go. Nothing under internal/
+//     imports this package.
+//   - Out-edges: config, engine, model, service, store, vcf (this file), plus
+//     config and vcf from handlers.go. queue.go imports no repo packages at all —
+//     the job queue is already self-contained.
+//   - The whole surface package main touches is OpenQueue(ctx, path) and
+//     New(cfg, snap, st, q, version).Run(ctx).
+//
+// Splitting this out requires those six internal/ packages to become importable
+// (moved out of internal/, or re-exported). internal/service and internal/store
+// are shared with the CLI and must stay behind.
 package server
 
 import (
@@ -18,12 +33,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/engine"
-	"github.com/compgenlab/cganno/internal/model"
-	"github.com/compgenlab/cganno/internal/service"
-	"github.com/compgenlab/cganno/internal/store"
-	"github.com/compgenlab/cganno/internal/vcf"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/engine"
+	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/service"
+	"github.com/compgenlab/varianthub-cli/internal/store"
+	"github.com/compgenlab/varianthub-cli/internal/vcf"
 )
 
 // Server holds the running annotation service: the loaded config + snapshot, the
@@ -73,9 +88,9 @@ func (s *Server) Run(ctx context.Context) error {
 		// The startup token goes to STDOUT (so it can be captured); logs go to STDERR.
 		fmt.Fprintln(os.Stdout, token)
 	} else {
-		log.Printf("cganno server: /v1 API is OPEN (require_token=false) — no bearer token required")
+		log.Printf("varhub server: /v1 API is OPEN (require_token=false) — no bearer token required")
 	}
-	log.Printf("cganno server: snapshot %q, %d worker(s); listening on http://%s",
+	log.Printf("varhub server: snapshot %q, %d worker(s); listening on http://%s",
 		s.snap.Name, s.cfg.Server.Workers, s.cfg.Server.Endpoint)
 
 	httpSrv := &http.Server{

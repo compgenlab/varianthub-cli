@@ -7,7 +7,7 @@ import (
 	"github.com/compgenlab/cghts/gtf"
 	"github.com/compgenlab/cghts/vcf"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // fakeModel is a geneModel that returns preset genes for chr1 regardless of range.

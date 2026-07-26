@@ -1,6 +1,6 @@
 # REVEL — a *build* source. REVEL ships as many per-segment CSV zips that need
 # unzipping, converting, merging, and indexing before tabix can use them. The
-# [[sources.build]] recipe makes that reproducible: `cganno download` fetches the
+# [[sources.build]] recipe makes that reproducible: `varhub download` fetches the
 # segment zips + the co-located converter, runs the steps, and indexes the result.
 # Because the recipe and its helper script live in this fragment's directory, the
 # whole thing is registry-shareable.
@@ -12,7 +12,7 @@ format   = "tab"
 ref_col  = 3
 alt_col  = 4
 url      = "https://sites.google.com/site/revelgenomics/"   # provenance only
-requires = ["unzip", "python3"]                            # bgzip+tabix via `cganno bgzip` (no external binaries)
+requires = ["unzip", "python3"]                            # bgzip+tabix via `varhub bgzip` (no external binaries)
 
   [sources.build]
   output = "merged.revel.hg38.txt.gz"
@@ -27,11 +27,11 @@ requires = ["unzip", "python3"]                            # bgzip+tabix via `cg
   assets = ["convert_csv_to_tab.py"]
   # Steps run in {workdir}; the last must write {output}. Placeholders:
   #   {workdir} {inputs} {output} {threads}
-  # `cganno bgzip -o {output} <tabix cols>` writes {output} AND {output}.tbi in one step
+  # `varhub bgzip -o {output} <tabix cols>` writes {output} AND {output}.tbi in one step
   # (no external bgzip/tabix binaries needed).
   run = [
     "for z in {inputs}/*.zip; do unzip -o $z -d {workdir}; done",
-    "python3 {workdir}/convert_csv_to_tab.py {workdir}/segments/*.csv | cganno bgzip -o {output} -s 1 -b 2 -e 2 -S 1",
+    "python3 {workdir}/convert_csv_to_tab.py {workdir}/segments/*.csv | varhub bgzip -o {output} -s 1 -b 2 -e 2 -S 1",
   ]
 
   [[sources.annotations]]

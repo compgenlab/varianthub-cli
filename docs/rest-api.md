@@ -1,6 +1,6 @@
 # REST API
 
-`cganno server` runs an asynchronous annotation service over HTTP: it exposes the same
+`varhub server` runs an asynchronous annotation service over HTTP: it exposes the same
 annotation engine as the CLI, backed by the same snapshot config and cache. Annotation can be
 expensive (external tools, large lookups), so requests are **queued** — a submit returns a
 **job id** immediately; a worker pool annotates in the background; the caller **polls** by job
@@ -23,7 +23,7 @@ endpoint   = "127.0.0.1:8080"                 # IP:port to listen on (bind local
 master_key = "change-me-to-a-secret"          # HMAC key signing /v1 API tokens (omit if require_token=false)
 require_token = true                           # bearer-token auth on /v1 (false = open, tokenless public API)
 workers    = 2                                 # async worker pool size — jobs run at once (default 1)
-db         = "$CGANNO_HOME/cganno_server.db"   # job-queue + results DB (default ./cganno_server.db)
+db         = "$VARHUB_HOME/varhub_server.db"   # job-queue + results DB (default ./varhub_server.db)
 
 # Large-job performance (VCF uploads)
 max_chunk_variants = 2000                      # split a job into ≤N-variant chunks annotated in parallel (0 = off)
@@ -54,13 +54,13 @@ annotate_threads = 0` (all cores) is a good split.
 Run it:
 
 ```sh
-cganno server                 # uses the [server] endpoint
-cganno server -addr :9000     # override the endpoint
+varhub server                 # uses the [server] endpoint
+varhub server -addr :9000     # override the endpoint
 ```
 
 The server uses the active snapshot (config `default_snapshot`, or the global `-snapshot`
 flag) and the annotation cache from `[database]`. It runs the **full locus path**, including
-`type="tool"` sources (VEP/ANNOVAR) — same as `cganno annotate <locus>`.
+`type="tool"` sources (VEP/ANNOVAR) — same as `varhub annotate <locus>`.
 
 ## Authentication
 
@@ -68,9 +68,9 @@ The `/v1/*` API is authenticated with an HMAC-signed bearer token. **On startup 
 prints one valid token to stdout** (logs go to stderr):
 
 ```sh
-$ cganno server
+$ varhub server
 eyJzdWIiOiJjZ2Fubm8i….fJfpi6WBBCUX-5G4FrXnYh78meDvTtjMJIy3sb0pO6E   # <- the token (stdout)
-2026/07/05 01:28:38 cganno server: snapshot "2026-07", 2 worker(s); listening on http://127.0.0.1:8080
+2026/07/05 01:28:38 varhub server: snapshot "2026-07", 2 worker(s); listening on http://127.0.0.1:8080
 ```
 
 Send it as `Authorization: Bearer <token>` on every `/v1` request. A token is
@@ -102,8 +102,8 @@ checks) and `GET /version` → `{"version":"…"}`.
 
 **Browsing your requests.** `GET /v1/jobs` (and `/ui/jobs`) lists jobs newest-first, but is
 **scoped to the requester** so one user can't browse another's history on an open server:
-unauthenticated requests see only their own jobs — by **session** (the `cganno_session` cookie the
-browser gets on first load, or an `X-Cganno-Session: <id>` header an API client sends), falling
+unauthenticated requests see only their own jobs — by **session** (the `varhub_session` cookie the
+browser gets on first load, or an `X-Varhub-Session: <id>` header an API client sends), falling
 back to the client IP when there is no session. An **authenticated** request (valid bearer token)
 is treated as an admin and sees **all** jobs; the `scoped` field in the response says which applies.
 Each job carries a `label` (the locus, or the uploaded VCF's filename) for display.
@@ -145,7 +145,7 @@ split into one object per allele, each carrying its own `chrom/pos/ref/alt`.
   (fetched from `/ui/annotations`, defaults pre-checked; select-all/none buttons), submit. Its
   JavaScript posts the job, polls its status, renders the result as a table, and offers
   **JSON / CSV / TSV** downloads. A **Recent requests** panel lists this browser session's prior
-  submissions (scoped by the `cganno_session` cookie) — click a completed one to re-view its
+  submissions (scoped by the `varhub_session` cookie) — click a completed one to re-view its
   results. Batch and VCF modes post to `/ui/submit/vcf` (batch synthesizes
   a sites-only VCF client-side). Disabled entirely when `ui_enabled = false`.
 - `GET /ui/annotations`, `POST /ui/submit`, `POST /ui/submit/vcf`, `GET /ui/jobs`,
@@ -174,7 +174,7 @@ proxy (Caddy / Traefik). Bind `endpoint` to `127.0.0.1:PORT` and proxy to it.
 ## Example
 
 ```sh
-TOKEN=$(cganno server | head -1)          # capture the startup token (run in the background)
+TOKEN=$(varhub server | head -1)          # capture the startup token (run in the background)
 BASE=http://127.0.0.1:8080
 
 # discover available annotations

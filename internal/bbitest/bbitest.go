@@ -1,6 +1,6 @@
 // Package bbitest builds tiny valid UCSC BBI files (bigWig / bigBed) for tests —
 // one chromosome, a single uncompressed data block, a single R-tree leaf. It lets
-// cganno test the bigwig/bigbed source formats end-to-end without external kent
+// varhub test the bigwig/bigbed source formats end-to-end without external kent
 // tools. It is test-support only.
 package bbitest
 

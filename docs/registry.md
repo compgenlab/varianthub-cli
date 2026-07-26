@@ -19,13 +19,13 @@ source — there is no separate `[[tools]]` section.
 
 ## Configuring registries
 
-When none is configured, cganno uses the built-in default
-([`compgenlab/cganno-public-data-registry`](https://github.com/compgenlab/cganno-public-data-registry)).
+When none is configured, varhub uses the built-in default
+([`compgenlab/varianthub-public-data-registry`](https://github.com/compgenlab/varianthub-public-data-registry)).
 Configure your own (one or several, searched in order) in `config.toml`:
 
 ```toml
 registries = [
-  "https://raw.githubusercontent.com/compgenlab/cganno-public-data-registry/main/registry.toml",
+  "https://raw.githubusercontent.com/compgenlab/varianthub-public-data-registry/main/registry.toml",
   "https://example.org/my-lab-registry/registry.toml",
 ]
 ```
@@ -33,10 +33,10 @@ registries = [
 ## Pulling from a registry
 
 ```sh
-cganno registry list                              # catalog: snapshots + sources (all registries)
-cganno registry pull-snapshot 2026-07             # write snapshots/2026-07.toml + all its sources
-cganno registry add-source clinvar:2026-01 --snapshot 2026-07   # add one source, ref it from a snapshot
-cganno registry add-source vep:113 --snapshot 2026-07           # a tool source works the same way
+varhub registry list                              # catalog: snapshots + sources (all registries)
+varhub registry pull-snapshot 2026-07             # write snapshots/2026-07.toml + all its sources
+varhub registry add-source clinvar:2026-01 --snapshot 2026-07   # add one source, ref it from a snapshot
+varhub registry add-source vep:113 --snapshot 2026-07           # a tool source works the same way
 ```
 
 - **`pull-snapshot <name>`** fetches a snapshot manifest and every source it references
@@ -47,10 +47,10 @@ cganno registry add-source vep:113 --snapshot 2026-07           # a tool source 
   kept alias for `add-source`.)
 - **Versions are tags** (docker-style): `clinvar:2026-01` pins a version, while bare
   `clinvar` or `clinvar:latest` resolve to the entry the registry marks `latest = true`.
-  cganno doesn't auto-sort versions (semver `1.3`, dbSNP `b157`, dates aren't comparable), so
+  varhub doesn't auto-sort versions (semver `1.3`, dbSNP `b157`, dates aren't comparable), so
   the publisher declares which is latest.
 
-After pulling, run `cganno download` to fetch the actual data files / tool images (the
+After pulling, run `varhub download` to fetch the actual data files / tool images (the
 registry ships configs, not data). See **[lifecycle](lifecycle.md)**.
 
 ## Submitting a source to the public registry
@@ -58,14 +58,14 @@ registry ships configs, not data). See **[lifecycle](lifecycle.md)**.
 You contribute a source (data or tool) by opening a GitHub issue containing its config; an
 Action turns that issue into a pull request for a maintainer to review and merge.
 
-1. **Build and test it locally.** Add the source to a snapshot, `cganno download` it, and
+1. **Build and test it locally.** Add the source to a snapshot, `varhub download` it, and
    confirm it annotates as expected.
 2. **Submit:**
 
    ```sh
-   cganno registry submit clinvar:2026-01               # a data source
-   cganno registry submit vep:113                        # a tool source works too
-   cganno registry submit clinvar:2026-01 --dry-run      # preview the issue title + body
+   varhub registry submit clinvar:2026-01               # a data source
+   varhub registry submit vep:113                        # a tool source works too
+   varhub registry submit clinvar:2026-01 --dry-run      # preview the issue title + body
    ```
 
    `submit` reads the named source fragment, strips machine-local fields (`localpath`), and
@@ -89,7 +89,7 @@ Action turns that issue into a pull request for a maintainer to review and merge
    updates `registry.toml`, and opens a PR. A maintainer reviews and merges; when the PR
    merges the issue auto-closes.
 
-Submissions target the canonical repo (`compgenlab/cganno-public-data-registry`); the
+Submissions target the canonical repo (`compgenlab/varianthub-public-data-registry`); the
 scaffolding for running your own registry repo (the Action, issue template, and a starter
 `registry.toml`) lives in `registry-repo-scaffold/`.
 

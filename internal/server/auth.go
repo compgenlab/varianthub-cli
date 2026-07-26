@@ -30,7 +30,7 @@ func sign(masterKey, msg string) string {
 // The payload is not secret; the signature authenticates it. iat is the issue
 // time (Unix seconds) — pass 0 to omit a meaningful timestamp.
 func MintToken(masterKey string, iat int64) (string, error) {
-	raw, err := json.Marshal(tokenPayload{Sub: "cganno", Iat: iat})
+	raw, err := json.Marshal(tokenPayload{Sub: "varhub", Iat: iat})
 	if err != nil {
 		return "", err
 	}

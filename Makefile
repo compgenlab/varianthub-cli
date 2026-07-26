@@ -1,10 +1,10 @@
-# cganno build management.
+# varhub build management.
 #
 # Pure-Go (modernc.org/sqlite + hts) ⇒ CGO_ENABLED=0 cross-compiles cleanly.
 # GOWORK=off is required: the parent go.work references modules that don't exist.
 
-BIN     := cganno
-PKG     := ./cmd/cganno
+BIN     := varhub
+PKG     := ./cmd/varhub
 VERSION := $(shell v=$$(git describe --tags --always 2>/dev/null || echo dev); if ! git diff --quiet HEAD 2>/dev/null; then v=$$(echo "$$v" | sed 's/-g/-dev-g/'); echo "$$v" | grep -q -- -dev || v="$$v-dev"; fi; echo "$$v")
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO      := GOWORK=off CGO_ENABLED=0 go
@@ -45,7 +45,7 @@ fmt:
 tidy:
 	GOWORK=off go mod tidy
 
-## install: install cganno into GOBIN
+## install: install varhub into GOBIN
 install:
 	$(GO) install -ldflags '$(LDFLAGS)' $(PKG)
 
@@ -54,7 +54,7 @@ cross: $(PLATFORMS)
 dist: cross
 
 ## cross-bin: build raw release binaries (no archive) for linux,darwin x amd64,arm64
-# Emits dist/cganno-<version>-<os>-<arch> (the bare executable) — used by the
+# Emits dist/varhub-<version>-<os>-<arch> (the bare executable) — used by the
 # release workflow, which attaches the raw binaries to the GitHub Release.
 cross-bin:
 	@mkdir -p dist; \

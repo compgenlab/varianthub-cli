@@ -4,14 +4,14 @@
 >>> PLACEHOLDER <<< Replace this with the real expander.
 
 VEP `--vcf` packs every consequence field into one comma/pipe-delimited CSQ INFO
-value, described by a `##INFO=<ID=CSQ,...Format: A|B|C>` header line. cganno runs
+value, described by a `##INFO=<ID=CSQ,...Format: A|B|C>` header line. varhub runs
 this as the first host post-processing step:
 
     python3 expand_vep_vcf.py < {workdir}/vep.vcf | ...
 
 So it must read a VCF on stdin and write a VCF on stdout where each CSQ subfield
 (Consequence, IMPACT, SYMBOL, …) becomes its own INFO tag, emitting matching
-`##INFO` header lines so downstream annotators (and cganno's tool annotations) can
+`##INFO` header lines so downstream annotators (and varhub's tool annotations) can
 read them directly. Records may carry several CSQ entries (one per transcript);
 keep them all — vep_vcf_worst_consequence.py picks among them next.
 """

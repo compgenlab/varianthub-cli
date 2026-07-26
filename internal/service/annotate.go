@@ -1,5 +1,5 @@
 // Package service holds the shared locus-annotation orchestration used by both
-// the CLI (`cganno annotate`) and the REST server (`cganno server`): building the
+// the CLI (`varhub annotate`) and the REST server (`varhub server`): building the
 // overlay/composite engine over a store, running any referenced external tool
 // sources, and annotating a set of loci. Keeping it here (rather than in package
 // main) lets the server reuse the exact same code path as the CLI.
@@ -13,14 +13,14 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/compgenlab/cganno/internal/annotate"
-	"github.com/compgenlab/cganno/internal/annotator"
-	"github.com/compgenlab/cganno/internal/annotator/overlay"
-	"github.com/compgenlab/cganno/internal/config"
-	"github.com/compgenlab/cganno/internal/engine"
-	"github.com/compgenlab/cganno/internal/fetch"
-	"github.com/compgenlab/cganno/internal/model"
-	"github.com/compgenlab/cganno/internal/store"
+	"github.com/compgenlab/varianthub-cli/internal/annotate"
+	"github.com/compgenlab/varianthub-cli/internal/annotator"
+	"github.com/compgenlab/varianthub-cli/internal/annotator/overlay"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/engine"
+	"github.com/compgenlab/varianthub-cli/internal/fetch"
+	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 // NewEngineOverStore builds the annotate engine over an already-open store: the
@@ -87,7 +87,7 @@ func RequireSources(cfg *config.Config, snap *config.Snapshot, anns []config.Ann
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("sources not downloaded — run `cganno download`:\n  %s", strings.Join(problems, "\n  "))
+		return fmt.Errorf("sources not downloaded — run `varhub download`:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Sn
 				return nil, cleanup, err
 			}
 		}
-		workdir, err := os.MkdirTemp("", "cganno-loci-tools-")
+		workdir, err := os.MkdirTemp("", "varhub-loci-tools-")
 		if err != nil {
 			return nil, cleanup, err
 		}
@@ -191,7 +191,7 @@ func AnnotateLociChunked(ctx context.Context, cfg *config.Config, snap *config.S
 				continue
 			}
 			if _, _, err := fetch.EnsureIndexedGTF(cfg, src, false); err != nil {
-				fmt.Fprintf(os.Stderr, "cganno: GTF source %s has no index (%v); annotating in a single pass — run `cganno download` to enable chunking\n", src.ID(), err)
+				fmt.Fprintf(os.Stderr, "varhub: GTF source %s has no index (%v); annotating in a single pass — run `varhub download` to enable chunking\n", src.ID(), err)
 				canChunk = false
 				break
 			}

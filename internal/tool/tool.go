@@ -18,7 +18,7 @@ import (
 
 	"github.com/compgenlab/cghts/htsio/tabix"
 
-	"github.com/compgenlab/cganno/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
 // Params carry the values substituted into step templates.
@@ -85,7 +85,7 @@ func Setup(ctx context.Context, t config.Tool, p Params) error {
 // stageAssets copies the tool's declared helper files (config.Tool.Assets, co-located
 // with the fragment in p.AssetDir) into the step workdir, so a step can reference one
 // as `{workdir}/<name>` — in host steps directly, and in container steps via the
-// workdir bind at /cganno/work. Staged files are made executable. A missing asset is a
+// workdir bind at /varhub/work. Staged files are made executable. A missing asset is a
 // clear error. No-op when the tool declares no assets.
 func stageAssets(t config.Tool, p Params) error {
 	for _, a := range t.Assets {
@@ -181,7 +181,7 @@ func replacer(t config.Tool, p Params) *strings.Replacer {
 	)
 }
 
-// absDir returns p as an absolute path (resolved against cganno's CWD), or p
+// absDir returns p as an absolute path (resolved against varhub's CWD), or p
 // unchanged if that fails. Container binds must be absolute — see containerMapping.
 func absDir(p string) string {
 	if a, err := filepath.Abs(p); err == nil {
@@ -191,13 +191,13 @@ func absDir(p string) string {
 }
 
 // ctrRoot is the fixed in-container mount root for container steps.
-const ctrRoot = "/cganno"
+const ctrRoot = "/varhub"
 
 // containerMapping binds each of p's host dirs to a fixed, shallow mountpoint under
 // ctrRoot and returns the template replacer (expanding placeholders to those
 // in-container paths) together with the matching `-B host:dest` flags. Decoupling
 // the in-container paths from the deep host paths means the engine only creates
-// shallow /cganno/* mountpoints — which avoids the engine having to recreate a deep
+// shallow /varhub/* mountpoints — which avoids the engine having to recreate a deep
 // host path inside a read-only image (the cause of INSTALL.pl "Could not create
 // directory" failures) and keeps a registry tool's commands host-independent.
 func containerMapping(t config.Tool, p Params) (*strings.Replacer, []string) {
@@ -219,9 +219,9 @@ func containerMapping(t config.Tool, p Params) (*strings.Replacer, []string) {
 	// in-container path and fails clearly ("no such file") rather than on a mount hook.
 	// Bind host directories by ABSOLUTE path: the container engine resolves a
 	// relative -B source against ITS working directory (exec1 sets that to the tool
-	// workdir), not cganno's CWD — so a relative {ref}/{input} (e.g. an input VCF
+	// workdir), not varhub's CWD — so a relative {ref}/{input} (e.g. an input VCF
 	// given as `sub/dir/in.vcf.gz`) would mount a non-existent path under the workdir.
-	// filepath.Abs resolves against cganno's CWD, where the path is actually valid.
+	// filepath.Abs resolves against varhub's CWD, where the path is actually valid.
 	ref := ""
 	if p.Ref != "" {
 		if dir := absDir(filepath.Dir(p.Ref)); dirExists(dir) {
@@ -257,7 +257,7 @@ func containerMapping(t config.Tool, p Params) (*strings.Replacer, []string) {
 }
 
 func runStep(ctx context.Context, t config.Tool, step config.Step, idx int, p Params) error {
-	// Container steps render against fixed /cganno/* mountpoints; host steps use the
+	// Container steps render against fixed /varhub/* mountpoints; host steps use the
 	// real host paths. The script always lives in the (host) workdir.
 	var repl *strings.Replacer
 	var binds []string
@@ -281,7 +281,7 @@ func runStep(ctx context.Context, t config.Tool, step config.Step, idx int, p Pa
 			return fmt.Errorf("container step needs an image (set tool.image)")
 		}
 		inner = append([]string{t.ContainerEngine(), "exec", "--no-home"}, binds...)
-		// The script lives in the host workdir, which is bound at /cganno/work.
+		// The script lives in the host workdir, which is bound at /varhub/work.
 		inner = append(inner, p.Image, "bash", ctrRoot+"/work/"+filepath.Base(script))
 	} else {
 		inner = []string{"bash", script}

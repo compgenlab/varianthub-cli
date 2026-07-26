@@ -8,7 +8,7 @@ Requires Go 1.25+.
 go install github.com/compgenlab/varianthub-cli/cmd/varhub@latest
 ```
 
-VariantHub is pure Go (`CGO_ENABLED=0`) — the engine, the [`hts`](https://github.com/compgenlab/hts)
+VariantHub is pure Go (`CGO_ENABLED=0`) — the engine, the [`cghts`](https://github.com/compgenlab/cghts)
 library, and the SQLite driver — so it needs no C toolchain and cross-compiles cleanly.
 
 ## 1. Initialize

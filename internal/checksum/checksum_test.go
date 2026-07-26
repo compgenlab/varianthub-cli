@@ -13,8 +13,8 @@ func TestValidateSpec(t *testing.T) {
 	cases := map[string]bool{
 		"": true,
 		"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": true,
-		"sha1:da39a3ee5e6b4b0d3255bfef95601890afd80709":                         true,
-		"md5:d41d8cd98f00b204e9800998ecf8427e":                                   true,
+		"sha1:da39a3ee5e6b4b0d3255bfef95601890afd80709":                           true,
+		"md5:d41d8cd98f00b204e9800998ecf8427e":                                    true,
 		"SHA256:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855": true, // case-insensitive
 		"sha256:nothex": false,
 		"sha256:dead":   false, // wrong length

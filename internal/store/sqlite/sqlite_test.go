@@ -124,7 +124,7 @@ func TestToolOutputCache(t *testing.T) {
 
 	header := []string{"##source=vep", "#CHROM\tPOS\tREF\tALT\tCSQ"}
 	lines := map[model.Locus][]string{
-		g: {"chr1\t100\tA\tG\tmissense"},
+		g:  {"chr1\t100\tA\tG\tmissense"},
 		tt: {"chr1\t100\tA\tT\tsynonymous"},
 	}
 	if err := s.PutToolOutput(ctx, uid, header, lines, []model.Locus{g, tt, none}); err != nil {

@@ -46,6 +46,7 @@ const formHTML = `<!doctype html>
 </head>
 <body>
 <h1>cganno — annotate variants</h1>
+<p id="snapshot-info" class="hint"></p>
 
 <form id="form">
   <div class="modes">
@@ -102,6 +103,9 @@ let lastVariants = null;
 async function loadAnnotations() {
   const r = await fetch('/ui/annotations');
   const data = await r.json();
+  const title = data.title || data.snapshot;
+  $('snapshot-info').textContent = 'Snapshot: ' + title +
+    (data.assembly ? ' (' + data.assembly + ')' : '');
   const box = $('anns');
   box.innerHTML = '';
   for (const src of data.sources) {
@@ -109,7 +113,8 @@ async function loadAnnotations() {
     const div = document.createElement('div');
     div.className = 'src';
     const v = src.version ? (':' + src.version) : '';
-    div.innerHTML = '<strong>' + src.name + v + ' (' + src.type + ')</strong>';
+    const label = src.title ? (src.title + ' — ' + src.name + v) : (src.name + v);
+    div.innerHTML = '<strong>' + label + ' (' + src.type + ')</strong>';
     for (const a of src.annotations) {
       const label = document.createElement('label');
       label.className = 'ann';

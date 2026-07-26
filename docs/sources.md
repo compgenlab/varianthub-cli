@@ -28,8 +28,10 @@ locus is looked up by genomic coordinate against the source's tabix index, then 
 
 ```toml
 [[sources]]
-name      = "clinvar"
+name      = "clinvar"                          # short slug (the id, with version)
 version   = "2026-01"
+title     = "ClinVar variant significance"    # human-readable name (optional; falls back to name)
+description = "Clinical significance from NCBI ClinVar"  # optional one-liner
 assembly  = "GRCh38"          # verified against the snapshot's assembly
 format    = "vcf"             # vcf | bed | tab | gtf
 url       = "https://…/clinvar.vcf.gz"        # canonical location (provenance + registry)

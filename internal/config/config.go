@@ -215,9 +215,10 @@ type Snapshot struct {
 	// it is populated by resolving the manifest's refs. A type="tool" source is just a
 	// source here (see ToolSources / Source.AsTool).
 	Sources []Source `toml:"sources,omitempty"`
-	// Snapshot-scoped config. Description/Assembly come from the manifest; Reference
-	// is resolved from the global config by Assembly (ReferenceFor). Not serialized
-	// on a source/tool fragment.
+	// Snapshot-scoped config. Title/Description/Assembly come from the manifest;
+	// Reference is resolved from the global config by Assembly (ReferenceFor). Not
+	// serialized on a source/tool fragment.
+	Title       string   `toml:"-"` // human-readable name (the manifest `title`); falls back to Name
 	Description string   `toml:"-"`
 	Assembly    string   `toml:"-"`
 	Reference   string   `toml:"-"` // resolved FASTA for Assembly (config [references.<assembly>])
@@ -230,6 +231,7 @@ type Snapshot struct {
 // SnapshotConfig is the on-disk snapshots/<name>.toml manifest: which sources/tools a
 // snapshot includes (by name:version) plus its snapshot-scoped settings.
 type SnapshotConfig struct {
+	Title       string   `toml:"title,omitempty"` // human-readable name (e.g. "July 2026 Clinical Panel")
 	Description string   `toml:"description,omitempty"`
 	Assembly    string   `toml:"assembly,omitempty"`
 	Sources     []string `toml:"sources,omitempty"`             // "name:version" refs (incl. tool sources)
@@ -238,6 +240,15 @@ type SnapshotConfig struct {
 
 // SourceByName finds a source by its name.
 func (snap *Snapshot) SourceByName(name string) *Source { return snap.source(name) }
+
+// DisplayTitle is the snapshot's human-readable name (Title), falling back to its
+// slug (Name) when no title is set.
+func (snap *Snapshot) DisplayTitle() string {
+	if snap.Title != "" {
+		return snap.Title
+	}
+	return snap.Name
+}
 
 // ToolSources returns the snapshot's type="tool" sources (in list order).
 func (snap *Snapshot) ToolSources() []Source {
@@ -260,6 +271,9 @@ type Source struct {
 	Type    string `toml:"type,omitempty"` // "" = data file (uses Format) | "builtin" | "tool"
 	Name    string `toml:"name,omitempty"`
 	Version string `toml:"version,omitempty"`
+	Title   string `toml:"title,omitempty"` // human-readable name (e.g. "ClinVar variant significance"); falls back to Name
+
+	Description string `toml:"description,omitempty"` // one-line description of the source
 
 	Assembly string `toml:"assembly,omitempty"` // genome assembly (e.g. GRCh38); verified against config
 	Format   string `toml:"format,omitempty"`   // vcf | bed | tab
@@ -348,6 +362,15 @@ type Source struct {
 	// Annotations declared on this source (nested; their Source is this source's
 	// Name, or the builtin name for a type="builtin" source).
 	Annotations []Annotation `toml:"annotations,omitempty"`
+}
+
+// DisplayTitle is the source's human-readable name (Title), falling back to its
+// slug (Name) when no title is set.
+func (s Source) DisplayTitle() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	return s.Name
 }
 
 // IsTool reports whether this source is an external per-query annotator.
@@ -1175,7 +1198,7 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 	}
 
 	snap := &Snapshot{
-		Name: name, Description: mc.Description, Defaults: mc.Defaults,
+		Name: name, Title: mc.Title, Description: mc.Description, Defaults: mc.Defaults,
 		Assembly: mc.Assembly,
 	}
 	// The reference FASTA is looked up from the global config by the snapshot's

@@ -195,6 +195,36 @@ func TestNormalizeDefaultsBuiltinName(t *testing.T) {
 	}
 }
 
+func TestDisplayTitleFallsBackToSlug(t *testing.T) {
+	if got := (Source{Name: "clinvar"}).DisplayTitle(); got != "clinvar" {
+		t.Errorf("source with no title: DisplayTitle = %q, want clinvar", got)
+	}
+	if got := (Source{Name: "clinvar", Title: "ClinVar"}).DisplayTitle(); got != "ClinVar" {
+		t.Errorf("source title: DisplayTitle = %q, want ClinVar", got)
+	}
+	if got := (&Snapshot{Name: "2026-07"}).DisplayTitle(); got != "2026-07" {
+		t.Errorf("snapshot with no title: DisplayTitle = %q, want 2026-07", got)
+	}
+	if got := (&Snapshot{Name: "2026-07", Title: "July Panel"}).DisplayTitle(); got != "July Panel" {
+		t.Errorf("snapshot title: DisplayTitle = %q, want July Panel", got)
+	}
+}
+
+func TestSnapshotManifestTitleRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.toml")
+	in := &SnapshotConfig{Title: "July 2026 Clinical Panel", Description: "d", Sources: []string{"builtins:1"}}
+	if err := WriteSnapshotConfig(path, in); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := ReadSnapshotConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Title != "July 2026 Clinical Panel" {
+		t.Errorf("title = %q, want round-tripped value", sc.Title)
+	}
+}
+
 func TestGeneListResolveAndValidate(t *testing.T) {
 	snap := &Snapshot{
 		Sources: []Source{

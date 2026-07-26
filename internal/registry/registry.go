@@ -22,14 +22,26 @@ import (
 type Entry struct {
 	Name        string `toml:"name"`
 	Version     string `toml:"version"`            // sources only
+	Title       string `toml:"title,omitempty"`    // human-readable name (falls back to Name)
 	Assembly    string `toml:"assembly,omitempty"` // sources only: genome assembly (e.g. GRCh38)
 	File        string `toml:"file"`               // path (relative to the registry base) of the config
 	Description string `toml:"description"`
+	// NonCommercial marks a source whose data/annotations are restricted to
+	// non-commercial use (informational; shown by `registry list`).
+	NonCommercial bool `toml:"non_commercial,omitempty"`
 	// Latest marks this as the most-recent version of the source, resolved when a
 	// ref omits the version or uses ":latest". Versions aren't reliably sortable
 	// (semver 1.3, dbSNP b157, dates), so the publisher declares latest — like a
 	// docker `latest` tag. At most one entry per source name should set it.
 	Latest bool `toml:"latest,omitempty"`
+}
+
+// DisplayTitle is the entry's human-readable name (Title), falling back to Name.
+func (e Entry) DisplayTitle() string {
+	if e.Title != "" {
+		return e.Title
+	}
+	return e.Name
 }
 
 // Manifest is the registry.toml at the registry base URL. Tool sources (type="tool")

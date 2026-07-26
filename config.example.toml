@@ -52,7 +52,28 @@ fasta = "/data/ref/GRCh38.fa"
 # by master_key; a valid token is printed to stdout on startup. Jobs + results are
 # stored in `db` (its own SQLite database, separate from the annotation cache).
 # [server]
-# endpoint   = "127.0.0.1:8080"          # IP:port to listen on
-# master_key = "change-me-to-a-secret"   # HMAC key signing /v1 API tokens
-# workers    = 1                          # async annotation worker pool size
+# endpoint   = "127.0.0.1:8080"          # IP:port to listen on (bind localhost behind a proxy)
+# master_key = "change-me-to-a-secret"   # HMAC key signing /v1 API tokens (omit if require_token=false)
+# require_token = true                    # bearer-token auth on /v1 (false = open, tokenless public API)
+# workers    = 2                          # async annotation worker pool size (jobs run at once)
 # db         = "$CGANNO_HOME/cganno_server.db"  # job-queue + results DB
+#
+# Large-job performance (VCF uploads):
+# max_chunk_variants = 2000              # split a job into ≤N-variant chunks, annotated in parallel (0 = off)
+# annotate_threads   = 0                 # per-job chunk parallelism (0 = all cores); lets one big job use many cores
+# submit_wait        = "10s"             # a submit (or results ?wait=) blocks up to this for the job to finish, returning results inline for fast jobs ("0" = always async)
+#
+# Retention:
+# job_ttl = "24h"                        # GC terminal jobs + results older than this ("" = default 24h; "0" = keep forever)
+#
+# Public-service abuse protection (this is an open async compute service):
+# max_jobs_per_ip = 2                    # per-IP concurrent running-job cap (fair queue; <=0 = unlimited)
+# rate_per_min    = 30                   # per-IP submit throttle, requests/min (<=0 = unlimited)
+# rate_burst      = 10                   # per-IP throttle burst
+# trusted_proxies = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+#                                        # peers whose X-Forwarded-For is trusted for client-IP (set to your proxy)
+# allow_tools_unauth = false             # let unauthenticated /ui trigger type="tool" sources (VEP/ANNOVAR)
+#
+# Browser UI:
+# ui_enabled       = true                # serve the browser form + /ui/* twins
+# ui_require_token = false               # also require the bearer token on /ui/* (for programmatic callers)

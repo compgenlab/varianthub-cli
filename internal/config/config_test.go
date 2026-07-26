@@ -166,6 +166,146 @@ func TestNormalizeSetsSource(t *testing.T) {
 	}
 }
 
+func TestNormalizeDefaultsBuiltinName(t *testing.T) {
+	snap := &Snapshot{
+		Sources: []Source{
+			{Type: "builtin", Annotations: []Annotation{
+				{Builtin: "auto_id"},             // no name → defaults to the builtin name
+				{Builtin: "tstv", Name: "ts_tv"}, // explicit name preserved
+			}},
+		},
+	}
+	snap.Normalize()
+
+	// The source's own annotations are defaulted in place (the overlay BuiltinSource
+	// reads these and keys output rows on Name).
+	if got := snap.Sources[0].Annotations[0].Name; got != "auto_id" {
+		t.Errorf("builtin without name: Name = %q, want auto_id", got)
+	}
+	if got := snap.Sources[0].Annotations[1].Name; got != "ts_tv" {
+		t.Errorf("builtin with explicit name overwritten: Name = %q, want ts_tv", got)
+	}
+	// The flat list carries the resolved names too.
+	names := map[string]bool{}
+	for _, a := range snap.Annotations {
+		names[a.Name] = true
+	}
+	if !names["auto_id"] || !names["ts_tv"] {
+		t.Errorf("flat annotations missing resolved names: %+v", snap.Annotations)
+	}
+}
+
+func TestDisplayTitleFallsBackToSlug(t *testing.T) {
+	if got := (Source{Name: "clinvar"}).DisplayTitle(); got != "clinvar" {
+		t.Errorf("source with no title: DisplayTitle = %q, want clinvar", got)
+	}
+	if got := (Source{Name: "clinvar", Title: "ClinVar"}).DisplayTitle(); got != "ClinVar" {
+		t.Errorf("source title: DisplayTitle = %q, want ClinVar", got)
+	}
+	if got := (&Snapshot{Name: "2026-07"}).DisplayTitle(); got != "2026-07" {
+		t.Errorf("snapshot with no title: DisplayTitle = %q, want 2026-07", got)
+	}
+	if got := (&Snapshot{Name: "2026-07", Title: "July Panel"}).DisplayTitle(); got != "July Panel" {
+		t.Errorf("snapshot title: DisplayTitle = %q, want July Panel", got)
+	}
+}
+
+func TestSnapshotManifestTitleRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.toml")
+	in := &SnapshotConfig{Title: "July 2026 Clinical Panel", Description: "d", Sources: []string{"builtins:1"}}
+	if err := WriteSnapshotConfig(path, in); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := ReadSnapshotConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Title != "July 2026 Clinical Panel" {
+		t.Errorf("title = %q, want round-tripped value", sc.Title)
+	}
+}
+
+func TestGeneListResolveAndValidate(t *testing.T) {
+	snap := &Snapshot{
+		Sources: []Source{
+			{Name: "gencode", Version: "48", Format: "gtf", URL: "https://x/gencode.v48.gtf.gz"},
+			{Type: "genelist", Name: "germline_cancer_genes", Version: "1", GTF: "gencode:48",
+				Genes:       []string{"BRCA1", "BRCA2"},
+				Annotations: []Annotation{{Name: "germline_cancer_gene"}}}, // no type → defaults to flag
+		},
+	}
+	if err := snap.resolveGeneLists(); err != nil {
+		t.Fatalf("resolveGeneLists: %v", err)
+	}
+	gl := &snap.Sources[1]
+	if gl.GTFRef == nil || gl.GTFRef.Name != "gencode" {
+		t.Fatalf("gtf ref not resolved: %+v", gl.GTFRef)
+	}
+	if gl.Annotations[0].Type != "flag" {
+		t.Errorf("genelist annotation type = %q, want flag (defaulted)", gl.Annotations[0].Type)
+	}
+	snap.normalize()
+	if err := snap.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	// The flat annotation is attributed to the genelist source.
+	found := false
+	for _, a := range snap.Annotations {
+		if a.Name == "germline_cancer_gene" {
+			found = true
+			if a.Source != "germline_cancer_genes" {
+				t.Errorf("annotation source = %q, want germline_cancer_genes", a.Source)
+			}
+		}
+	}
+	if !found {
+		t.Error("germline_cancer_gene annotation missing from flat list")
+	}
+}
+
+func TestGeneListUnknownGTFRejected(t *testing.T) {
+	snap := &Snapshot{Sources: []Source{
+		{Type: "genelist", Name: "gl", Version: "1", GTF: "nope:1",
+			Genes: []string{"BRCA1"}, Annotations: []Annotation{{Name: "x"}}},
+	}}
+	if err := snap.resolveGeneLists(); err == nil {
+		t.Error("expected an error when the referenced GTF source is absent")
+	}
+}
+
+func TestGeneSetInlineAndFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CGANNO_HOME", "")
+	path := writeConfig(t, dir, "data_dir = \"data\"\nannotations_dir = \"ann\"\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// genes_file lives alongside the source fragment: ann/sources/gl/1/genes.txt
+	fragDir := filepath.Dir(cfg.SourceFile("gl", "1"))
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "genes.txt"),
+		[]byte("# cancer genes\nMLH1\nMSH2\n\nPMS2\t extra columns ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := Source{Type: "genelist", Name: "gl", Version: "1",
+		Genes: []string{"BRCA1", "brca2"}, GenesFile: "genes.txt"}
+	set, err := cfg.GeneSet(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"BRCA1", "BRCA2", "MLH1", "MSH2", "PMS2"} {
+		if !set[want] {
+			t.Errorf("gene set missing %q (upper-cased); got %v", want, set)
+		}
+	}
+	if len(set) != 5 {
+		t.Errorf("gene set size = %d, want 5", len(set))
+	}
+}
+
 func TestResolveSourceFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CGANNO_HOME", "")

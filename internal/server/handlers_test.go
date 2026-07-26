@@ -38,7 +38,7 @@ func testServer(t *testing.T) *Server {
 
 	cfg := &config.Config{}
 	cfg.Server.MasterKey = "test-key"
-	return New(cfg, snap, nil, q)
+	return New(cfg, snap, nil, q, "test")
 }
 
 func TestHandleAnnotationsDiscovery(t *testing.T) {

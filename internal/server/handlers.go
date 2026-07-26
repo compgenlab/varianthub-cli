@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/compgenlab/cganno/internal/config"
 	"github.com/compgenlab/cganno/internal/vcf"
@@ -24,14 +27,17 @@ type annotationInfo struct {
 }
 
 type sourceInfo struct {
-	Name        string           `json:"name"`
-	Version     string           `json:"version,omitempty"`
-	Type        string           `json:"type"` // "data" | "builtin" | "tool"
-	Annotations []annotationInfo `json:"annotations"`
+	Name          string           `json:"name"`
+	Version       string           `json:"version,omitempty"`
+	Title         string           `json:"title,omitempty"`
+	Type          string           `json:"type"` // "data" | "builtin" | "tool" | "genelist"
+	NonCommercial bool             `json:"non_commercial,omitempty"`
+	Annotations   []annotationInfo `json:"annotations"`
 }
 
 type annotationsResponse struct {
-	Snapshot string       `json:"snapshot"`
+	Snapshot string       `json:"snapshot"` // slug
+	Title    string       `json:"title"`    // human-readable snapshot name (falls back to slug)
 	Assembly string       `json:"assembly"`
 	Sources  []sourceInfo `json:"sources"`
 }
@@ -43,6 +49,8 @@ func sourceKind(s config.Source) string {
 		return "builtin"
 	case s.IsTool():
 		return "tool"
+	case s.IsGeneList():
+		return "genelist"
 	default:
 		return "data"
 	}
@@ -51,10 +59,14 @@ func sourceKind(s config.Source) string {
 // describeAnnotations builds the discovery payload from the loaded snapshot: each
 // source and the annotation fields it exposes, marking the default-set members.
 func (s *Server) describeAnnotations() annotationsResponse {
-	resp := annotationsResponse{Snapshot: s.snap.Name, Assembly: s.snap.Assembly}
+	resp := annotationsResponse{Snapshot: s.snap.Name, Title: s.snap.DisplayTitle(), Assembly: s.snap.Assembly}
 	// Index the flat, derived annotation list (carries Source + Default) by source.
 	for _, src := range s.snap.Sources {
-		info := sourceInfo{Name: src.Name, Version: src.Version, Type: sourceKind(src), Annotations: []annotationInfo{}}
+		info := sourceInfo{
+			Name: src.Name, Version: src.Version, Title: src.Title, Type: sourceKind(src),
+			NonCommercial: src.NonCommercial,
+			Annotations:   []annotationInfo{},
+		}
 		for _, a := range s.snap.Annotations {
 			if !annotationBelongs(a, src) {
 				continue
@@ -181,7 +193,10 @@ func (s *Server) handleAnnotateLocus(w http.ResponseWriter, r *http.Request) {
 	if !s.validate(w, req.Locus, selection) {
 		return
 	}
-	s.enqueue(w, r, KindLocus, selection, []byte(req.Locus))
+	if !s.toolGateOK(w, r, selection) {
+		return
+	}
+	s.enqueue(w, r, KindLocus, selection, req.Locus, []byte(req.Locus))
 }
 
 // handleAnnotateVCF serves POST /v1/annotate/vcf: a multipart VCF upload (field
@@ -192,7 +207,7 @@ func (s *Server) handleAnnotateVCF(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
 		return
 	}
-	file, _, err := r.FormFile("vcf")
+	file, header, err := r.FormFile("vcf")
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "missing \"vcf\" file field")
 		return
@@ -222,7 +237,72 @@ func (s *Server) handleAnnotateVCF(w http.ResponseWriter, r *http.Request) {
 	if !s.validateSelection(w, selection) {
 		return
 	}
-	s.enqueue(w, r, KindVCF, selection, body)
+	if !s.toolGateOK(w, r, selection) {
+		return
+	}
+	label := "VCF upload"
+	if header != nil && header.Filename != "" {
+		label = header.Filename
+	}
+	s.enqueue(w, r, KindVCF, selection, label, body)
+}
+
+const sessionCookie = "cganno_session"
+
+// sessionID returns the requester's session id from its cookie (browser) or the
+// X-Cganno-Session header (API clients), or "" when there is none.
+func (s *Server) sessionID(r *http.Request) string {
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return strings.TrimSpace(r.Header.Get("X-Cganno-Session"))
+}
+
+// ensureSession returns the requester's session id, minting one (Set-Cookie) if
+// absent so a browser gets a stable id to scope its request history by. Must be
+// called before the response body is written.
+func (s *Server) ensureSession(w http.ResponseWriter, r *http.Request) string {
+	if id := s.sessionID(r); id != "" {
+		return id
+	}
+	id, err := newID()
+	if err != nil {
+		return ""
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: id, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 90 * 24 * 3600,
+	})
+	return id
+}
+
+// authed reports whether the request carries a valid bearer token (used to relax
+// the unauthenticated tool-source gate for /ui callers that do present a token).
+func (s *Server) authed(r *http.Request) bool {
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && VerifyToken(s.cfg.Server.MasterKey, strings.TrimSpace(tok))
+}
+
+// toolGateOK blocks unauthenticated requests from triggering expensive type="tool"
+// sources (VEP/ANNOVAR — the main compute-amplification vector) unless the server
+// opts in via allow_tools_unauth. Authenticated requests are always allowed. On a
+// block it writes a 403 and returns false.
+func (s *Server) toolGateOK(w http.ResponseWriter, r *http.Request, selection string) bool {
+	if s.cfg.Server.ToolsAllowedUnauth() || s.authed(r) {
+		return true
+	}
+	anns, err := resolveSelection(s.snap, selection)
+	if err != nil {
+		return true // selection already validated upstream; don't double-report
+	}
+	for _, a := range anns {
+		if src := s.snap.SourceByName(a.Source); src != nil && src.IsTool() {
+			writeJSONError(w, http.StatusForbidden,
+				"tool-based annotations require an API token on this server")
+			return false
+		}
+	}
+	return true
 }
 
 // snapshotOK enforces that a request's optional snapshot matches the one the
@@ -254,14 +334,156 @@ func (s *Server) validateSelection(w http.ResponseWriter, selection string) bool
 	return true
 }
 
-// enqueue records a job and writes the 202 { job_id } response.
-func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, kind, selection string, body []byte) {
-	id, err := s.queue.Enqueue(r.Context(), kind, s.snap.Name, selection, body)
+// enqueue records a job (tagged with the trusted-proxy-resolved client IP for fair
+// scheduling). With a ?wait= (capped by submit_wait), it blocks up to that long for
+// the job to finish and returns the results inline — so fast jobs come back done in
+// one round trip. Otherwise it writes the async 202 { job_id } response as before.
+func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, kind, selection, label string, body []byte) {
+	ip := clientIP(r, s.trusted)
+	session := s.ensureSession(w, r) // tags the job so the submitter can browse it later
+	id, err := s.queue.Enqueue(r.Context(), NewJob{
+		Kind: kind, Snapshot: s.snap.Name, Selection: selection,
+		ClientIP: ip, Session: session, Label: label, Body: body,
+	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "enqueue: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
+	wait := s.parseWait(r)
+	if wait <= 0 {
+		writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
+		return
+	}
+	job, _, err := s.queue.WaitFor(r.Context(), id, wait)
+	if err != nil {
+		// ctx cancelled (client gone) or a DB error — still hand back the id to poll.
+		writeJSON(w, http.StatusAccepted, submitResponse{JobID: id, Status: StatusQueued})
+		return
+	}
+	s.writeSubmitResult(w, r.Context(), id, job)
+}
+
+// submitResponse is the wait-aware submit/poll payload: it always carries the job
+// id and status, plus the results array (and n_variants) once the job is done, or
+// the error message if it failed.
+type submitResponse struct {
+	JobID     string          `json:"job_id"`
+	Status    string          `json:"status"`
+	NVariants int64           `json:"n_variants,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Results   json.RawMessage `json:"results,omitempty"`
+}
+
+// writeSubmitResult renders a job's current state: 200 with results when done, 200
+// with the error when failed, else 202 with the job id to keep polling.
+func (s *Server) writeSubmitResult(w http.ResponseWriter, ctx context.Context, id string, job Job) {
+	switch job.Status {
+	case StatusDone:
+		result, ok, err := s.queue.Result(ctx, id)
+		if err != nil || !ok {
+			writeJSON(w, http.StatusAccepted, submitResponse{JobID: id, Status: StatusRunning})
+			return
+		}
+		writeJSON(w, http.StatusOK, submitResponse{
+			JobID: id, Status: StatusDone, NVariants: job.NVariants, Results: json.RawMessage(result)})
+	case StatusError:
+		writeJSON(w, http.StatusOK, submitResponse{JobID: id, Status: StatusError, Error: job.Error})
+	default:
+		writeJSON(w, http.StatusAccepted, submitResponse{JobID: id, Status: job.Status})
+	}
+}
+
+// parseWait reads a bounded wait from ?wait= (plain seconds like "10" or a Go
+// duration like "10s"), capped by the server's submit_wait. 0/absent = don't wait.
+func (s *Server) parseWait(r *http.Request) time.Duration {
+	raw := strings.TrimSpace(r.URL.Query().Get("wait"))
+	if raw == "" {
+		return 0
+	}
+	var d time.Duration
+	if n, err := strconv.Atoi(raw); err == nil {
+		d = time.Duration(n) * time.Second
+	} else if pd, err := time.ParseDuration(raw); err == nil {
+		d = pd
+	} else {
+		return 0
+	}
+	if d < 0 {
+		return 0
+	}
+	if capD := s.cfg.Server.SubmitWaitCap(); d > capD {
+		d = capD
+	}
+	return d
+}
+
+// --- ops endpoints ---------------------------------------------------------
+
+// handleHealthz is an unauthenticated liveness/readiness probe (for the reverse
+// proxy). It reports the snapshot the server is serving.
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "ok",
+		"snapshot": s.snap.Name,
+		"title":    s.snap.DisplayTitle(),
+		"assembly": s.snap.Assembly,
+	})
+}
+
+// handleVersion reports the cganno build version.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
+}
+
+// handleListJobs lists jobs (newest first) with optional ?status= and ?limit/?offset
+// paging. It serves both /v1/jobs and /ui/jobs. Listing is scoped to the requester's
+// own history (by session cookie, else client IP) UNLESS the request is
+// authenticated with a token — an admin then sees every job. This keeps one user
+// from browsing another's requests on an open public server.
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	switch status {
+	case "", StatusQueued, StatusRunning, StatusDone, StatusError:
+	default:
+		writeJSONError(w, http.StatusBadRequest, "invalid status filter")
+		return
+	}
+	limit := atoiDefault(r.URL.Query().Get("limit"), 50)
+	if limit > 500 {
+		limit = 500
+	}
+	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+
+	f := JobFilter{Status: status}
+	scoped := !s.authed(r)
+	if scoped {
+		if sess := s.sessionID(r); sess != "" {
+			f.Session = sess
+		} else {
+			f.ClientIP = clientIP(r, s.trusted)
+		}
+	}
+	jobs, err := s.queue.List(r.Context(), f, limit, offset)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if jobs == nil {
+		jobs = []Job{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "limit": limit, "offset": offset, "scoped": scoped})
+}
+
+// atoiDefault parses s as an int, falling back to def on empty/invalid input.
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }
 
 // --- job status + results --------------------------------------------------
@@ -281,7 +503,9 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleJobResults(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	job, ok, err := s.queue.Get(r.Context(), id)
+	// ?wait= long-polls up to the (capped) duration for the job to finish, so a
+	// poller can block rather than spin.
+	job, ok, err := s.queue.WaitFor(r.Context(), id, s.parseWait(r))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return

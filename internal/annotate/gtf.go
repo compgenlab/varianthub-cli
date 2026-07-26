@@ -44,34 +44,39 @@ type gtfAnnotator struct {
 	closer   io.Closer // the indexed reader's tabix handle, if any
 }
 
-// newGTFAnnotator returns an annotator over a GTF source. It prefers the indexed
+// openGeneModel opens a GTF source's queryable gene model. It prefers the indexed
 // (tabix, memory-bounded) reader — ensuring the bgzip+tabix index exists (built
 // once, cached under cache_dir) — and falls back to loading the whole GTF into
-// memory (with a stderr warning) when no index is available.
-func newGTFAnnotator(cfg *config.Config, src config.Source, fields []gtfField) (*gtfAnnotator, error) {
+// memory (with a stderr warning) when no index is available. The returned closer
+// is the indexed reader's tabix handle (nil for the in-memory model).
+func openGeneModel(cfg *config.Config, src config.Source) (model geneModel, conv *vcf.ContigConverter, closer io.Closer, filename string, err error) {
 	tags := src.GTFTags
-	if indexed, _, err := fetch.EnsureIndexedGTF(cfg, src, false); err == nil {
-		if isrc, err := gtf.NewIndexedAnnotationSource(indexed, tags); err == nil {
-			return &gtfAnnotator{
-				src: isrc, fields: fields,
-				conv: vcf.NewContigConverter(isrc.RefNames()), filename: indexed, closer: isrc,
-			}, nil
+	if indexed, _, ierr := fetch.EnsureIndexedGTF(cfg, src, false); ierr == nil {
+		if isrc, ierr := gtf.NewIndexedAnnotationSource(indexed, tags); ierr == nil {
+			return isrc, vcf.NewContigConverter(isrc.RefNames()), isrc, indexed, nil
 		} else {
-			warnUnindexedGTF(src, err)
+			warnUnindexedGTF(src, ierr)
 		}
 	} else {
-		warnUnindexedGTF(src, err)
+		warnUnindexedGTF(src, ierr)
 	}
 	// Fallback: the whole-file in-memory model.
 	raw := cfg.ResolveSourcePath(src)
 	msrc, err := gtf.NewAnnotationSource(raw, tags)
 	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	return msrc, vcf.NewContigConverter(msrc.RefNames()), nil, raw, nil
+}
+
+// newGTFAnnotator returns an annotator over a GTF source, emitting the selected
+// fields under their configured names.
+func newGTFAnnotator(cfg *config.Config, src config.Source, fields []gtfField) (*gtfAnnotator, error) {
+	model, conv, closer, filename, err := openGeneModel(cfg, src)
+	if err != nil {
 		return nil, err
 	}
-	return &gtfAnnotator{
-		src: msrc, fields: fields,
-		conv: vcf.NewContigConverter(msrc.RefNames()), filename: raw,
-	}, nil
+	return &gtfAnnotator{src: model, fields: fields, conv: conv, closer: closer, filename: filename}, nil
 }
 
 func warnUnindexedGTF(src config.Source, err error) {

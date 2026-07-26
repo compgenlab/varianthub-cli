@@ -5,6 +5,7 @@
 package config
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -64,7 +66,7 @@ type Config struct {
 	// assembly in `References`, so a snapshot's reference is looked up from its
 	// assembly (see ReferenceFor) rather than being pinned in the manifest.
 	DataDir         string               `toml:"data_dir"`
-	CacheDir        string               `toml:"cache_dir"` // downloaded source files, cached by name/version
+	CacheDir        string               `toml:"cache_dir"`          // downloaded source files, cached by name/version
 	TempDir         string               `toml:"temp_dir,omitempty"` // base for scratch dirs (tool workdirs, fan-out parts); default: $TMPDIR or /tmp
 	DefaultSnapshot string               `toml:"default_snapshot"`
 	AnnotationsDir  string               `toml:"annotations_dir"`      // root holding sources/ tools/ snapshots/ (default "annotations")
@@ -110,10 +112,84 @@ type Database struct {
 // printed to stdout at startup. Jobs and results persist in DB (its own SQLite
 // database, separate from the annotation cache).
 type ServerConfig struct {
-	Endpoint  string `toml:"endpoint,omitempty"`   // IP:port to listen on (e.g. "127.0.0.1:8080")
-	MasterKey string `toml:"master_key,omitempty"` // HMAC signing key for API tokens
-	Workers   int    `toml:"workers,omitempty"`    // async worker pool size (default 1)
-	DB        string `toml:"db,omitempty"`         // job-queue SQLite path (default "cganno_server.db")
+	Endpoint     string `toml:"endpoint,omitempty"`      // IP:port to listen on (e.g. "127.0.0.1:8080")
+	MasterKey    string `toml:"master_key,omitempty"`    // HMAC signing key for API tokens (required unless require_token=false)
+	RequireToken *bool  `toml:"require_token,omitempty"` // require a bearer token on /v1 (default true; false = open, tokenless public API)
+	Workers      int    `toml:"workers,omitempty"`       // async worker pool size (default 1)
+	DB           string `toml:"db,omitempty"`            // job-queue SQLite path (default "cganno_server.db")
+
+	// Large-job performance.
+	MaxChunkVariants *int `toml:"max_chunk_variants,omitempty"` // variant-count chunk size for a job (default 2000; explicit 0 disables chunking)
+	AnnotateThreads  int  `toml:"annotate_threads,omitempty"`   // per-job chunk parallelism (default 0 = GOMAXPROCS)
+
+	// Interactive convenience: how long a submit (or a results ?wait=) may block
+	// server-side for the job to finish before returning the job id to poll. Lets
+	// fast jobs return results in the first response. Caps any client-requested wait.
+	SubmitWait string `toml:"submit_wait,omitempty"` // Go duration (default "10s"; "0" = never wait, always async)
+
+	// Retention.
+	JobTTL string `toml:"job_ttl,omitempty"` // GC age for terminal jobs + their results, a Go duration (default "24h"; "0" = keep forever)
+
+	// Public-service abuse protection.
+	MaxJobsPerIP     int      `toml:"max_jobs_per_ip,omitempty"`    // per-IP concurrent running-job cap (default 2; <=0 = unlimited)
+	RatePerMin       int      `toml:"rate_per_min,omitempty"`       // per-IP submit throttle, requests/min (default 30; <=0 = unlimited)
+	RateBurst        int      `toml:"rate_burst,omitempty"`         // per-IP throttle burst (default 10)
+	TrustedProxies   []string `toml:"trusted_proxies,omitempty"`    // CIDRs whose X-Forwarded-For is trusted (default loopback + private)
+	AllowToolsUnauth *bool    `toml:"allow_tools_unauth,omitempty"` // whether unauthenticated /ui may trigger type="tool" sources (default false)
+
+	// Browser UI.
+	UIEnabled      *bool `toml:"ui_enabled,omitempty"`       // serve the browser form + /ui/* twins (default true)
+	UIRequireToken bool  `toml:"ui_require_token,omitempty"` // require the bearer token on /ui/* too (default false)
+}
+
+// JobTTLDuration parses JobTTL into a retention duration for terminal jobs and
+// their results. An empty string defaults to 24 hours; "0" (or any zero duration)
+// disables GC. Unparseable values fall back to the 24-hour default.
+func (s ServerConfig) JobTTLDuration() time.Duration {
+	if s.JobTTL == "" {
+		return 24 * time.Hour
+	}
+	d, err := time.ParseDuration(s.JobTTL)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return d // may be 0 → GC disabled
+}
+
+// ChunkSize is the effective variant-count chunk size: nil ⇒ 2000 (chunking on),
+// an explicit 0 ⇒ chunking disabled, else the configured value.
+func (s ServerConfig) ChunkSize() int {
+	if s.MaxChunkVariants == nil {
+		return 2000
+	}
+	return *s.MaxChunkVariants
+}
+
+// RequireTokenForV1 reports whether the /v1 API is bearer-token authenticated
+// (nil RequireToken ⇒ true, the secure default). false serves /v1 open.
+func (s ServerConfig) RequireTokenForV1() bool { return s.RequireToken == nil || *s.RequireToken }
+
+// SubmitWaitCap is the maximum time a submit/results request may block waiting for
+// a job to finish. Empty ⇒ 10s; "0" ⇒ never wait (always return immediately).
+// Unparseable/negative values fall back to 10s.
+func (s ServerConfig) SubmitWaitCap() time.Duration {
+	if s.SubmitWait == "" {
+		return 10 * time.Second
+	}
+	d, err := time.ParseDuration(s.SubmitWait)
+	if err != nil || d < 0 {
+		return 10 * time.Second
+	}
+	return d // may be 0 → never wait
+}
+
+// UIIsEnabled reports whether the browser UI is served (nil UIEnabled ⇒ true).
+func (s ServerConfig) UIIsEnabled() bool { return s.UIEnabled == nil || *s.UIEnabled }
+
+// ToolsAllowedUnauth reports whether unauthenticated /ui requests may trigger tool
+// sources (nil ⇒ false, the safe default for a public server).
+func (s ServerConfig) ToolsAllowedUnauth() bool {
+	return s.AllowToolsUnauth != nil && *s.AllowToolsUnauth
 }
 
 // Reference pins the reference genome FASTA for one assembly (used by external
@@ -139,9 +215,10 @@ type Snapshot struct {
 	// it is populated by resolving the manifest's refs. A type="tool" source is just a
 	// source here (see ToolSources / Source.AsTool).
 	Sources []Source `toml:"sources,omitempty"`
-	// Snapshot-scoped config. Description/Assembly come from the manifest; Reference
-	// is resolved from the global config by Assembly (ReferenceFor). Not serialized
-	// on a source/tool fragment.
+	// Snapshot-scoped config. Title/Description/Assembly come from the manifest;
+	// Reference is resolved from the global config by Assembly (ReferenceFor). Not
+	// serialized on a source/tool fragment.
+	Title       string   `toml:"-"` // human-readable name (the manifest `title`); falls back to Name
 	Description string   `toml:"-"`
 	Assembly    string   `toml:"-"`
 	Reference   string   `toml:"-"` // resolved FASTA for Assembly (config [references.<assembly>])
@@ -154,6 +231,7 @@ type Snapshot struct {
 // SnapshotConfig is the on-disk snapshots/<name>.toml manifest: which sources/tools a
 // snapshot includes (by name:version) plus its snapshot-scoped settings.
 type SnapshotConfig struct {
+	Title       string   `toml:"title,omitempty"` // human-readable name (e.g. "July 2026 Clinical Panel")
 	Description string   `toml:"description,omitempty"`
 	Assembly    string   `toml:"assembly,omitempty"`
 	Sources     []string `toml:"sources,omitempty"`             // "name:version" refs (incl. tool sources)
@@ -162,6 +240,15 @@ type SnapshotConfig struct {
 
 // SourceByName finds a source by its name.
 func (snap *Snapshot) SourceByName(name string) *Source { return snap.source(name) }
+
+// DisplayTitle is the snapshot's human-readable name (Title), falling back to its
+// slug (Name) when no title is set.
+func (snap *Snapshot) DisplayTitle() string {
+	if snap.Title != "" {
+		return snap.Title
+	}
+	return snap.Name
+}
 
 // ToolSources returns the snapshot's type="tool" sources (in list order).
 func (snap *Snapshot) ToolSources() []Source {
@@ -184,9 +271,18 @@ type Source struct {
 	Type    string `toml:"type,omitempty"` // "" = data file (uses Format) | "builtin" | "tool"
 	Name    string `toml:"name,omitempty"`
 	Version string `toml:"version,omitempty"`
+	Title   string `toml:"title,omitempty"` // human-readable name (e.g. "ClinVar variant significance"); falls back to Name
+
+	Description string `toml:"description,omitempty"` // one-line description of the source
 
 	Assembly string `toml:"assembly,omitempty"` // genome assembly (e.g. GRCh38); verified against config
 	Format   string `toml:"format,omitempty"`   // vcf | bed | tab
+
+	// NonCommercial marks that this source's data/annotations carry commercial-use
+	// restrictions (e.g. CADD). Informational only — nothing is blocked; it is
+	// surfaced in `registry list`, at download, and in the server's annotation
+	// discovery so users are aware.
+	NonCommercial bool `toml:"non_commercial,omitempty"`
 
 	// URL / URLIndex are the canonical reference locations (kept for provenance and
 	// the registry). LocalPath / LocalPathIndex are this machine's actual files: if
@@ -223,6 +319,17 @@ type Source struct {
 	// other formats.
 	GTFTags []string `toml:"gtf_tags,omitempty"`
 
+	// --- type="genelist" only: flag a variant when its gene (per the referenced
+	// GTF model) is in the list. GTF names a gtf source in the same snapshot; the
+	// gene set is Genes (inline) ∪ GenesFile (one symbol per line). GeneField picks
+	// which GTF attribute to match. ---------------------------------------------
+	GTF       string   `toml:"gtf,omitempty"`        // referenced GTF source: "name" or "name:version"
+	Genes     []string `toml:"genes,omitempty"`      // inline gene symbols (or IDs)
+	GenesFile string   `toml:"genes_file,omitempty"` // file of genes, one per line (blank/#comment lines skipped); relative to the source fragment dir
+	GeneField string   `toml:"gene_field,omitempty"` // GTF attribute to match: "gene_name" (default) | "gene_id"
+
+	GTFRef *Source `toml:"-"` // resolved referenced GTF source (set at snapshot load)
+
 	// Build, when set, produces this source's data file from a download+preprocess
 	// recipe instead of a ready-to-use url/localpath. Run once by `cganno download`
 	// and cached. Mutually exclusive with url/localpath/files/chroms.
@@ -257,8 +364,130 @@ type Source struct {
 	Annotations []Annotation `toml:"annotations,omitempty"`
 }
 
+// DisplayTitle is the source's human-readable name (Title), falling back to its
+// slug (Name) when no title is set.
+func (s Source) DisplayTitle() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	return s.Name
+}
+
 // IsTool reports whether this source is an external per-query annotator.
 func (s Source) IsTool() bool { return s.Type == "tool" }
+
+// IsGeneList reports whether this source flags variants by gene membership.
+func (s Source) IsGeneList() bool { return s.Type == "genelist" }
+
+// GenesFilePath resolves a genelist's genes_file: env-expanded, absolute as-is,
+// else relative to the source's fragment directory. Empty when no file is set.
+func (c *Config) GenesFilePath(s Source) string {
+	p := os.ExpandEnv(s.GenesFile)
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(filepath.Dir(c.SourceFile(s.Name, s.Version)), p)
+}
+
+// GeneSet resolves a genelist source's membership set: the inline Genes plus, when
+// set, GenesFile (one symbol per line; blank lines and #-comments skipped; the
+// first whitespace/comma-delimited field of each line is taken). Keys are
+// upper-cased for case-insensitive matching.
+func (c *Config) GeneSet(s Source) (map[string]bool, error) {
+	set := map[string]bool{}
+	add := func(g string) {
+		if g = strings.TrimSpace(g); g != "" {
+			set[strings.ToUpper(g)] = true
+		}
+	}
+	for _, g := range s.Genes {
+		add(g)
+	}
+	if path := c.GenesFilePath(s); path != "" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("genelist %s: open genes_file: %w", s.ID(), err)
+		}
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			add(strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == '\t' || r == ' ' })[0])
+		}
+		if err := sc.Err(); err != nil {
+			return nil, fmt.Errorf("genelist %s: read genes_file: %w", s.ID(), err)
+		}
+	}
+	return set, nil
+}
+
+// resolveGeneLists wires each genelist source to its referenced GTF source (by
+// name or name:version) and defaults its annotations to type="flag". Called before
+// normalize so the flat annotation list carries the resolved type. The referenced
+// GTF must be a gtf source present in the same snapshot.
+func (snap *Snapshot) resolveGeneLists() error {
+	for i := range snap.Sources {
+		s := &snap.Sources[i]
+		if !s.IsGeneList() {
+			continue
+		}
+		if s.GTF == "" {
+			return fmt.Errorf("genelist %q: needs gtf = \"name[:version]\" (a GTF source in this snapshot)", s.ID())
+		}
+		name := s.GTF
+		if i := strings.IndexByte(name, ':'); i >= 0 {
+			name = name[:i]
+		}
+		ref := snap.SourceByName(name)
+		if ref == nil || !ref.IsGTFSource() {
+			return fmt.Errorf("genelist %q: gtf %q is not a GTF source in this snapshot", s.ID(), s.GTF)
+		}
+		refCopy := *ref
+		s.GTFRef = &refCopy
+		for j := range s.Annotations {
+			if s.Annotations[j].Type == "" {
+				s.Annotations[j].Type = "flag"
+			}
+		}
+	}
+	return nil
+}
+
+// validateGeneListSource checks a type="genelist" container and its annotations.
+func validateGeneListSource(s *Source) error {
+	if s.GTFRef == nil {
+		return fmt.Errorf("genelist %q: gtf %q not resolved to a GTF source in this snapshot", s.ID(), s.GTF)
+	}
+	if len(s.Genes) == 0 && s.GenesFile == "" {
+		return fmt.Errorf("genelist %q: needs genes = [...] and/or genes_file", s.ID())
+	}
+	switch strings.ToLower(s.GeneField) {
+	case "", "gene_name", "gene_id":
+	default:
+		return fmt.Errorf("genelist %q: gene_field %q must be gene_name or gene_id", s.ID(), s.GeneField)
+	}
+	if len(s.Annotations) == 0 {
+		return fmt.Errorf("genelist %q: needs at least one annotation", s.ID())
+	}
+	for _, a := range s.Annotations {
+		if a.Name == "" {
+			return fmt.Errorf("genelist %q: an annotation needs a name", s.ID())
+		}
+		if a.Type != "flag" {
+			return fmt.Errorf("genelist %q annotation %q: only type=\"flag\" is supported", s.ID(), a.Name)
+		}
+		if a.Builtin != "" {
+			return fmt.Errorf("genelist %q annotation %q: `builtin` is not valid here", s.ID(), a.Name)
+		}
+	}
+	return nil
+}
 
 // AsTool projects a type="tool" source onto the internal Tool execution view used
 // by the tool runner/cache (internal/tool, annotate/toolcache). Tool is no longer a
@@ -363,6 +592,9 @@ type SourceFile struct {
 // explicit Files list, or one per chromosome for a {chrom} template, else a single
 // file.
 func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
+	if s.IsGeneList() {
+		return nil // a genelist has no data file of its own; it reads the referenced GTF
+	}
 	if s.Build != nil {
 		// A build source resolves to its single produced (cached) file.
 		return []SourceFile{{Path: c.ResolveSourcePath(s)}}
@@ -664,11 +896,19 @@ func (snap *Snapshot) normalize() {
 	}
 	for si := range snap.Sources {
 		s := &snap.Sources[si]
-		for _, a := range s.Annotations {
+		for ai := range s.Annotations {
+			a := &s.Annotations[ai]
 			if s.IsBuiltinSource() {
-				add(a, a.Builtin)
+				// A builtin's output name defaults to the builtin name when omitted
+				// (a blank key is never useful). Done in place so the overlay
+				// BuiltinSource — which reads the source's own annotations — and the
+				// flat list below both see the resolved name.
+				if a.Name == "" {
+					a.Name = a.Builtin
+				}
+				add(*a, a.Builtin)
 			} else {
-				add(a, s.Name) // data and tool sources alike
+				add(*a, s.Name) // data and tool sources alike
 			}
 		}
 	}
@@ -763,6 +1003,21 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Server.DB == "" {
 		c.Server.DB = "cganno_server.db"
+	}
+	if c.Server.MaxJobsPerIP == 0 {
+		c.Server.MaxJobsPerIP = 2
+	}
+	if c.Server.RatePerMin == 0 {
+		c.Server.RatePerMin = 30
+	}
+	if c.Server.RateBurst == 0 {
+		c.Server.RateBurst = 10
+	}
+	if len(c.Server.TrustedProxies) == 0 {
+		// Behind Caddy/Traefik on loopback by default; private ranges cover
+		// container/sidecar proxies. Override to lock down which peer's
+		// X-Forwarded-For is trusted.
+		c.Server.TrustedProxies = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 	}
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -943,7 +1198,7 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 	}
 
 	snap := &Snapshot{
-		Name: name, Description: mc.Description, Defaults: mc.Defaults,
+		Name: name, Title: mc.Title, Description: mc.Description, Defaults: mc.Defaults,
 		Assembly: mc.Assembly,
 	}
 	// The reference FASTA is looked up from the global config by the snapshot's
@@ -962,6 +1217,9 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 		snap.Sources = append(snap.Sources, frag.Sources...)
 	}
 
+	if err := snap.resolveGeneLists(); err != nil {
+		return nil, fmt.Errorf("snapshot %q: %w", name, err)
+	}
 	snap.normalize()
 	if err := snap.validate(); err != nil {
 		return nil, fmt.Errorf("snapshot %q: %w", name, err)
@@ -1010,6 +1268,12 @@ func (snap *Snapshot) validate() error {
 		seen[s.ID()] = true
 		if s.IsTool() {
 			if err := validateToolSource(s); err != nil {
+				return err
+			}
+			continue
+		}
+		if s.IsGeneList() {
+			if err := validateGeneListSource(s); err != nil {
 				return err
 			}
 			continue

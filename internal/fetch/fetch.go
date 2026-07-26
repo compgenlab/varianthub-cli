@@ -536,6 +536,18 @@ func Missing(cfg *config.Config, src config.Source) []string {
 	if src.IsBuiltinSource() {
 		return nil
 	}
+	if src.IsGeneList() {
+		// A genelist has no data file of its own: it needs the referenced GTF
+		// present (indexed) and its genes_file, if any.
+		var missing []string
+		if src.GTFRef != nil {
+			missing = append(missing, Missing(cfg, *src.GTFRef)...)
+		}
+		if p := cfg.GenesFilePath(src); p != "" && !fileExists(p) {
+			missing = append(missing, p+" (genes_file)")
+		}
+		return missing
+	}
 	var missing []string
 	for _, f := range cfg.ResolveSourceFiles(src) {
 		if !fileExists(f.Path) {

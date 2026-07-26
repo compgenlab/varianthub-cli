@@ -54,11 +54,16 @@ snapshot-scoped settings:
 
 ```toml
 # snapshots/2026-07.toml
+title               = "July 2026 Clinical Panel"     # human-readable name (optional; falls back to the slug)
 description         = "GRCh38 clinical annotation set"
 assembly            = "GRCh38"                       # scopes the cache + verifies sources
 sources             = ["builtins:1", "clinvar:2026-01", "gnomad:4.1", "vep:113"]
 default_annotations = ["clinvar_sig", "gnomad_af", "vep_consequence"]
 ```
+
+The snapshot's short filename (`2026-07`) is its **slug** — the id used in refs and the cache
+stamp; `title` is the optional human-readable name shown in `snapshot list`, `registry list`,
+and the server UI. Sources have the same `title` (slug = `name`).
 
 - **Apply order = list order.** A bare `name` (no `:version`) resolves to the sole
   version on disk.

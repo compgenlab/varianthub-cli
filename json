@@ -1,0 +1,2 @@
+#chrom	pos	ref	alt	auto_id	indel	tstv
+chr1	100	A	G	chr1_100_A_G		TS

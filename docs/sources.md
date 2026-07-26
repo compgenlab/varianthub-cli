@@ -28,8 +28,10 @@ locus is looked up by genomic coordinate against the source's tabix index, then 
 
 ```toml
 [[sources]]
-name      = "clinvar"
+name      = "clinvar"                          # short slug (the id, with version)
 version   = "2026-01"
+title     = "ClinVar variant significance"    # human-readable name (optional; falls back to name)
+description = "Clinical significance from NCBI ClinVar"  # optional one-liner
 assembly  = "GRCh38"          # verified against the snapshot's assembly
 format    = "vcf"             # vcf | bed | tab | gtf
 url       = "https://…/clinvar.vcf.gz"        # canonical location (provenance + registry)
@@ -197,3 +199,48 @@ A tool source runs only when a **selected annotation** references it, so an unus
 For how a tool receives variants and how its output is read, see
 **[Input & output formats](io-formats.md)**. For the run/setup mechanics, see
 **[lifecycle](lifecycle.md)**.
+
+## Gene-list sources (`type = "genelist"`)
+
+A gene-list source **flags a variant when the gene overlapping it is in a named list**,
+using a GTF gene model already in the snapshot to resolve the variant → gene. For example, a
+"germline cancer genes" list flags any variant landing in `BRCA1`, `TP53`, ….
+
+```toml
+[[sources]]
+type    = "genelist"
+name    = "germline_cancer_genes"
+version = "1"
+gtf     = "gencode:48"            # a gtf source in this snapshot ("name" or "name:version")
+genes   = ["BRCA1", "BRCA2", "TP53"]   # inline, and/or:
+# genes_file = "germline_cancer_genes.txt"   # one symbol per line (# comments ok);
+                                             # resolved next to this fragment
+# gene_field = "gene_name"        # match gene_name (default) or gene_id
+
+  [[sources.annotations]]
+  name        = "germline_cancer_gene"   # type defaults to "flag"
+  description = "Variant in a germline cancer gene"
+```
+
+The referenced GTF is queried once per variant (its bgzip+tabix index is built by `cganno
+download`, same as any GTF source). The annotation is a **flag**: present when the variant's
+gene is in the set (matched case-insensitively), absent otherwise. You can define several
+gene-list sources over the same GTF (e.g. germline cancer, actionable, drug-target).
+
+## Commercial-use restrictions
+
+Any source may set `non_commercial = true` to mark that its data/annotations carry
+commercial-use restrictions (e.g. CADD). It is **informational only — nothing is blocked**; it
+just makes the restriction visible.
+
+```toml
+[[sources]]
+name           = "cadd"
+version        = "1.7"
+# …
+non_commercial = true
+```
+
+The flag is surfaced by `cganno registry list` (a `[non-commercial]` marker), printed as a
+notice by `cganno download`, and returned in the REST server's `GET /v1/annotations` discovery
+(`"non_commercial": true`) so a public service can show it to users.

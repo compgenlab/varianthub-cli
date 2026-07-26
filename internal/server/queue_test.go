@@ -42,7 +42,7 @@ func TestEnqueueProcessDone(t *testing.T) {
 		return []byte(`["` + string(input) + `"]`), 1, nil
 	})
 
-	id, err := q.Enqueue(ctx, KindLocus, "2026-07", "clinvar_sig", []byte("chr1:100:A:G"))
+	id, err := q.Enqueue(ctx, NewJob{Kind: KindLocus, Snapshot: "2026-07", Selection: "clinvar_sig", ClientIP: "1.2.3.4", Body: []byte("chr1:100:A:G")})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestRunnerErrorMarksJobFailed(t *testing.T) {
 	q.StartWorkers(ctx, 1, func(_ context.Context, _ Job, _ []byte) ([]byte, int, error) {
 		return nil, 0, context.DeadlineExceeded
 	})
-	id, _ := q.Enqueue(ctx, KindLocus, "s", "", []byte("bad"))
+	id, _ := q.Enqueue(ctx, NewJob{Kind: KindLocus, Snapshot: "s", Body: []byte("bad")})
 
 	waitFor(t, 2*time.Second, func() bool {
 		job, ok, _ := q.Get(ctx, id)
@@ -103,7 +103,7 @@ func TestCrashRecoveryRequeuesRunning(t *testing.T) {
 		t.Fatalf("OpenQueue: %v", err)
 	}
 	// Enqueue then forcibly mark it running, simulating a crash mid-job.
-	id, _ := q1.Enqueue(context.Background(), KindLocus, "s", "", []byte("x"))
+	id, _ := q1.Enqueue(context.Background(), NewJob{Kind: KindLocus, Snapshot: "s", Body: []byte("x")})
 	if _, err := q1.db.Exec(`UPDATE job SET status=? WHERE id=?`, StatusRunning, id); err != nil {
 		t.Fatalf("force running: %v", err)
 	}

@@ -77,7 +77,9 @@ func cmdInit(cfgPath string, args []string) error {
 	builtins := &config.Snapshot{Sources: []config.Source{{
 		Name: "builtins", Version: "1", Type: "builtin",
 		Annotations: []config.Annotation{
-			{Builtin: "auto_id"}, {Builtin: "indel"}, {Builtin: "tstv"},
+			{Builtin: "auto_id", Name: "auto_id"},
+			{Builtin: "indel", Name: "indel"},
+			{Builtin: "tstv", Name: "tstv"},
 		},
 	}}}
 	if err := config.WriteFragment(loaded.SourceFile("builtins", "1"), builtins); err != nil {
@@ -134,11 +136,15 @@ func cmdSnapshot(cfgPath string, args []string) error {
 			return nil
 		}
 		for _, n := range names {
+			title := n
+			if sc, err := config.ReadSnapshotConfig(cfg.SnapshotFile(n)); err == nil && sc.Title != "" {
+				title = sc.Title
+			}
 			marker := ""
 			if n == cfg.DefaultSnapshot {
 				marker = "  (default)"
 			}
-			fmt.Printf("%s%s\n", n, marker)
+			fmt.Printf("%-16s %s%s\n", n, title, marker)
 		}
 		return nil
 	case "add":
@@ -148,9 +154,10 @@ func cmdSnapshot(cfgPath string, args []string) error {
 		fs.Var(&srcs, "source", "source ref name:version to include, incl. tool sources (repeatable/comma-separated)")
 		fs.Var(&defs, "default", "annotation name applied by default (repeatable/comma-separated)")
 		assembly := fs.String("assembly", "", "genome assembly (its reference FASTA comes from config [references.<assembly>])")
+		title := fs.String("title", "", "human-readable name (e.g. \"July 2026 Clinical Panel\")")
 		desc := fs.String("desc", "", "description")
 		if len(args) < 2 {
-			return fmt.Errorf("usage: snapshot add <name> [--source a:1 --source vep:113 --default x --assembly A]")
+			return fmt.Errorf("usage: snapshot add <name> [--title T --source a:1 --source vep:113 --default x --assembly A]")
 		}
 		name := args[1]
 		if err := fs.Parse(args[2:]); err != nil {
@@ -161,7 +168,7 @@ func cmdSnapshot(cfgPath string, args []string) error {
 			return fmt.Errorf("snapshot %q already exists (%s)", name, file)
 		}
 		sc := &config.SnapshotConfig{
-			Description: *desc, Assembly: *assembly,
+			Title: *title, Description: *desc, Assembly: *assembly,
 			Sources: srcs, Defaults: defs,
 		}
 		if *from != "" {
@@ -170,6 +177,9 @@ func cmdSnapshot(cfgPath string, args []string) error {
 				return fmt.Errorf("copy from %q: %w", *from, err)
 			}
 			sc = base
+			if *title != "" {
+				sc.Title = *title
+			}
 			sc.Description = *desc
 		}
 		if err := config.WriteSnapshotConfig(file, sc); err != nil {
@@ -198,8 +208,10 @@ func cmdSource(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("source add", flag.ContinueOnError)
 	var s config.Source
 	snap := fs.String("snapshot", "", "also add this source to the named snapshot manifest")
-	fs.StringVar(&s.Name, "name", "", "source name")
+	fs.StringVar(&s.Name, "name", "", "source name (slug)")
 	fs.StringVar(&s.Version, "version", "", "source data version")
+	fs.StringVar(&s.Title, "title", "", "human-readable name (e.g. \"ClinVar variant significance\")")
+	fs.StringVar(&s.Description, "desc", "", "one-line description")
 	fs.StringVar(&s.Assembly, "assembly", "", "genome assembly (default: the target snapshot's assembly)")
 	fs.StringVar(&s.URL, "url", "", "canonical download URL")
 	fs.StringVar(&s.URLIndex, "url-index", "", "URL of a prebuilt .tbi/.csi index (else guessed/built)")
@@ -469,6 +481,14 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	snap, err := cfg.LoadSnapshot(snapshot)
 	if err != nil {
 		return err
+	}
+
+	// Non-commercial sources: inform the user (nothing is blocked) so they don't
+	// unknowingly obtain data whose terms restrict commercial use.
+	for _, s := range snap.Sources {
+		if s.NonCommercial {
+			fmt.Fprintf(os.Stderr, "note: %s has commercial-use restrictions (non-commercial)\n", s.ID())
+		}
 	}
 
 	// fetch.Snapshot handles data sources (download/build) + tool sources (image

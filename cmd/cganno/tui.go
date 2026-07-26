@@ -40,8 +40,8 @@ func cmdEdit(cfgPath string, args []string) error {
 // --- styles -----------------------------------------------------------------
 
 var (
-	cAccent  = lipgloss.AdaptiveColor{Light: "26", Dark: "39"}  // blue
-	cAccent2 = lipgloss.AdaptiveColor{Light: "30", Dark: "79"}  // teal
+	cAccent  = lipgloss.AdaptiveColor{Light: "26", Dark: "39"}   // blue
+	cAccent2 = lipgloss.AdaptiveColor{Light: "30", Dark: "79"}   // teal
 	cSubtle  = lipgloss.AdaptiveColor{Light: "246", Dark: "244"} // gray
 	cLight   = lipgloss.Color("231")
 	cRed     = lipgloss.Color("203")
@@ -166,7 +166,7 @@ type item struct {
 }
 
 func (i item) Title() string       { return i.title }
-func (i item) Description() string  { return i.desc }
+func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
 
 // setList builds the active list (title/help are rendered by our header/footer).
@@ -916,8 +916,8 @@ func (m *editModel) toSourceDefaults() tea.Cmd {
 	}
 	m.defaultAnns = filterIn(sc.Defaults, stringSet(names)) // this source's currently-default names
 	m.form = huh.NewForm(huh.NewGroup(
-		huh.NewMultiSelect[string]().Title("default annotations for "+srcName(m.curSource)).
-			Description("checked = applied by default in snapshot "+m.curSnap).
+		huh.NewMultiSelect[string]().Title("default annotations for " + srcName(m.curSource)).
+			Description("checked = applied by default in snapshot " + m.curSnap).
 			Options(selectedOptions(names, m.defaultAnns)...).Value(&m.defaultAnns),
 	)).WithTheme(formTheme()).WithShowHelp(true)
 	m.sizeForm()
@@ -1142,7 +1142,7 @@ func (m *editModel) toBuiltinArgs(name string) tea.Cmd {
 	m.pendingBuiltin = name
 	m.argsVal = ""
 	m.form = huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title(name+" args (e.g. PANEL:v1)").Value(&m.argsVal),
+		huh.NewInput().Title(name + " args (e.g. PANEL:v1)").Value(&m.argsVal),
 	)).WithTheme(formTheme())
 	m.sizeForm()
 	return m.form.Init()
@@ -1165,7 +1165,7 @@ func (m *editModel) toConfirm(path string) tea.Cmd {
 	m.curPath = path
 	m.confirmVal = false
 	m.form = huh.NewForm(huh.NewGroup(
-		huh.NewConfirm().Title("Delete fragment "+filepath.Base(path)+"?").
+		huh.NewConfirm().Title("Delete fragment " + filepath.Base(path) + "?").
 			Affirmative("Delete").Negative("Cancel").Value(&m.confirmVal),
 	)).WithTheme(formTheme())
 	m.sizeForm()

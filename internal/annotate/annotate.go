@@ -306,6 +306,13 @@ func AnnotatorFor(src config.Source, a config.Annotation, files []config.SourceF
 // handling). The caller owns Close() on each returned annotator. This is the
 // shared entry point for the cache/locus path (see annotator/overlay).
 func SourceAnnotators(cfg *config.Config, src config.Source, anns []config.Annotation, files []config.SourceFile) ([]htsann.Annotator, error) {
+	if src.IsGeneList() {
+		ann, err := buildGeneList(cfg, src, anns)
+		if err != nil {
+			return nil, err
+		}
+		return []htsann.Annotator{ann}, nil
+	}
 	if src.IsGTFSource() {
 		ann, err := buildGTF(cfg, src, anns, files)
 		if err != nil {

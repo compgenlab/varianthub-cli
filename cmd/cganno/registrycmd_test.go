@@ -48,7 +48,7 @@ func TestSourceReproducible(t *testing.T) {
 func TestBundleAssets(t *testing.T) {
 	dir := t.TempDir()
 	want := map[string]string{
-		"expand_vep_vcf.py":           "#!/usr/bin/env python3\nprint('expand')\n",
+		"expand_vep_vcf.py":            "#!/usr/bin/env python3\nprint('expand')\n",
 		"vep_vcf_worst_consequence.py": "#!/usr/bin/env python3\nprint('worst')\n",
 	}
 	for n, c := range want {

@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/compgenlab/cganno/internal/annotate"
 	"github.com/compgenlab/cganno/internal/annotator"
 	"github.com/compgenlab/cganno/internal/annotator/overlay"
@@ -106,9 +108,25 @@ func RequireSources(cfg *config.Config, snap *config.Snapshot, anns []config.Ann
 // each tool once over all loci, annotating from its indexed output directly. The
 // engine's annotation-value cache (st) is used either way.
 func AnnotateLoci(ctx context.Context, cfg *config.Config, snap *config.Snapshot, st store.Store, selected []config.Annotation, loci []model.Locus, skipToolCache bool) (engine.AnnotateResult, error) {
+	eng, cleanup, err := buildEngineForLoci(ctx, cfg, snap, st, selected, loci, skipToolCache)
+	if err != nil {
+		return engine.AnnotateResult{}, err
+	}
+	defer cleanup()
+	return eng.Annotate(ctx, loci)
+}
+
+// buildEngineForLoci performs the once-per-request setup shared by the single-pass
+// and chunked paths: it verifies file sources are present, runs any referenced tool
+// sources ONCE over all loci (VEP/ANNOVAR batch — never per chunk), and builds the
+// overlay/composite engine over the store. The returned cleanup removes the tool
+// workdir and must run only after every eng.Annotate call has completed (the engine
+// overlays the tools' output files from that workdir).
+func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Snapshot, st store.Store, selected []config.Annotation, loci []model.Locus, skipToolCache bool) (*engine.Engine, func(), error) {
+	cleanup := func() {}
 	// Every file source must be present; the engine annotates all of them.
 	if err := RequireSources(cfg, snap, snap.Annotations); err != nil {
-		return engine.AnnotateResult{}, err
+		return nil, cleanup, err
 	}
 
 	// Run any tool sources (VEP/ANNOVAR) referenced by the selected annotations over
@@ -124,23 +142,101 @@ func AnnotateLoci(ctx context.Context, cfg *config.Config, snap *config.Snapshot
 	if tools := ReferencedTools(snap, selected); len(tools) > 0 && (toolStore != nil || skipToolCache) {
 		if toolStore != nil {
 			if err := toolStore.Init(ctx); err != nil {
-				return engine.AnnotateResult{}, err
+				return nil, cleanup, err
 			}
 		}
 		workdir, err := os.MkdirTemp("", "cganno-loci-tools-")
 		if err != nil {
-			return engine.AnnotateResult{}, err
+			return nil, cleanup, err
 		}
-		defer os.RemoveAll(workdir)
+		cleanup = func() { os.RemoveAll(workdir) }
 		toolSrcs, err = annotate.RunToolsForLoci(ctx, cfg, tools, toolStore, loci, workdir, snap.Reference, snap.Assembly)
 		if err != nil {
-			return engine.AnnotateResult{}, err
+			cleanup()
+			return nil, func() {}, err
 		}
 	}
 
 	eng, err := NewEngineOverStore(ctx, cfg, snap, st, toolSrcs)
 	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return eng, cleanup, nil
+}
+
+// AnnotateLociChunked annotates loci like AnnotateLoci, but splits a large locus set
+// into contiguous chunks of ≤ chunkSize variants and annotates them concurrently
+// (up to `threads` at once), so a single dominant source's per-locus lookups
+// parallelize across cores instead of running as one goroutine over the whole input.
+// Tools still run once over all loci (in buildEngineForLoci). A chunkSize ≤ 0, or a
+// locus count within one chunk, runs a single pass. Results merge into one map;
+// engine.BuildVariants restores input order, so chunk completion order is irrelevant.
+func AnnotateLociChunked(ctx context.Context, cfg *config.Config, snap *config.Snapshot, st store.Store, selected []config.Annotation, loci []model.Locus, skipToolCache bool, chunkSize, threads int) (engine.AnnotateResult, error) {
+	eng, cleanup, err := buildEngineForLoci(ctx, cfg, snap, st, selected, loci, skipToolCache)
+	if err != nil {
 		return engine.AnnotateResult{}, err
 	}
-	return eng.Annotate(ctx, loci)
+	defer cleanup()
+
+	// Warm GTF indexes ONCE before fanning out: EnsureIndexedGTF builds the tabix
+	// index on first use with no locking, so concurrent chunks would otherwise race
+	// on the same output. If a source has no buildable index, its overlay annotator
+	// re-parses the whole GTF into memory on every call — catastrophic under chunking
+	// — so fall back to a single pass in that case.
+	canChunk := chunkSize > 0 && len(loci) > chunkSize
+	if canChunk {
+		for _, src := range snap.Sources {
+			if !src.IsGTFSource() {
+				continue
+			}
+			if _, _, err := fetch.EnsureIndexedGTF(cfg, src, false); err != nil {
+				fmt.Fprintf(os.Stderr, "cganno: GTF source %s has no index (%v); annotating in a single pass — run `cganno download` to enable chunking\n", src.ID(), err)
+				canChunk = false
+				break
+			}
+		}
+	}
+	if !canChunk {
+		return eng.Annotate(ctx, loci)
+	}
+
+	// Partition into contiguous index ranges and annotate concurrently.
+	var chunks [][]model.Locus
+	for i := 0; i < len(loci); i += chunkSize {
+		end := i + chunkSize
+		if end > len(loci) {
+			end = len(loci)
+		}
+		chunks = append(chunks, loci[i:end])
+	}
+
+	results := make([]engine.AnnotateResult, len(chunks))
+	g, gctx := errgroup.WithContext(ctx)
+	if threads > 0 {
+		g.SetLimit(threads)
+	}
+	for i, chunk := range chunks {
+		i, chunk := i, chunk
+		g.Go(func() error {
+			res, err := eng.Annotate(gctx, chunk)
+			if err != nil {
+				return err
+			}
+			results[i] = res
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return engine.AnnotateResult{}, err
+	}
+
+	merged := engine.AnnotateResult{ByLocus: make(map[string][]model.AnnRow, len(loci)), Version: eng.Version()}
+	for _, res := range results {
+		for k, rows := range res.ByLocus {
+			merged.ByLocus[k] = rows
+		}
+		merged.Novel += res.Novel
+	}
+	return merged, nil
 }

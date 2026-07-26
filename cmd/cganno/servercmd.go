@@ -34,8 +34,8 @@ func cmdServer(ctx context.Context, cfgPath, snapshot string, args []string) err
 	if cfg.Server.Endpoint == "" {
 		return fmt.Errorf("no server endpoint configured — add [server] endpoint = \"IP:port\" to config.toml (or pass -addr)")
 	}
-	if cfg.Server.MasterKey == "" {
-		return fmt.Errorf("no server master_key configured — add [server] master_key = \"...\" to config.toml")
+	if cfg.Server.RequireTokenForV1() && cfg.Server.MasterKey == "" {
+		return fmt.Errorf("no server master_key configured — add [server] master_key = \"...\" to config.toml (or set require_token = false for an open public API)")
 	}
 	snap, err := cfg.LoadSnapshot(snapshot)
 	if err != nil {
@@ -68,6 +68,6 @@ func cmdServer(ctx context.Context, cfgPath, snapshot string, args []string) err
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv := server.New(cfg, snap, st, q)
+	srv := server.New(cfg, snap, st, q, version)
 	return srv.Run(runCtx)
 }

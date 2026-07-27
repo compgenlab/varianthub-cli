@@ -115,8 +115,6 @@ func run(args []string) error {
 		return cmdAnnotation(*cfgPath, cmdArgs)
 	case "annotate":
 		return cmdAnnotate(ctx, *cfgPath, *snapshotName, cmdArgs)
-	case "server":
-		return cmdServer(ctx, *cfgPath, *snapshotName, cmdArgs)
 	case "download":
 		return cmdDownload(ctx, *cfgPath, *snapshotName, cmdArgs)
 	case "registry":
@@ -171,7 +169,6 @@ annotation commands:
                                --no-cache ignores the cache DB entirely (compute fresh, persist nothing)
                                vcf output: --tool-cache-dir DIR caches/reuses tool output by input
                                --temp-dir DIR puts scratch files there (default: config temp_dir, else $TMPDIR)
-  server [-addr IP:port]       run the async REST annotate server (needs a [server] config block)
   versions                     show the active snapshot
   version                      print the varhub version
 `)

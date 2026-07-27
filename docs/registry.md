@@ -93,4 +93,3 @@ Submissions target the canonical repo (`compgenlab/varianthub-public-data-regist
 scaffolding for running your own registry repo (the Action, issue template, and a starter
 `registry.toml`) lives in `registry-repo-scaffold/`.
 
-Next: **[REST API](rest-api.md)**.

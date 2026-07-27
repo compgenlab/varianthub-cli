@@ -29,8 +29,9 @@ dance, no database server to stand up.
   the input into batches outside VariantHub and run one job per batch (`cgkit vcf-split` /
   `vcf-concat`, e.g. across a job array). BGZF output, and GTF gene models that are
   tabix-indexed and queried by position stay memory-bounded rather than loaded whole into RAM.
-- **REST server.** `varhub server` runs the same engine behind an asynchronous HTTP job
-  queue (submit a locus or an uploaded VCF → poll → fetch JSON results).
+- **Web-ready.** [varianthub-web](https://github.com/compgenlab/varianthub-web) wraps this
+  binary in a REST API and web UI, running annotation jobs by invoking it — so the CLI and
+  the service produce byte-identical output.
 
 ## Install
 
@@ -59,16 +60,10 @@ varhub annotate --all --format vcf -o out.vcf in.vcf
 varhub annotate --all --format vcf -t 8 -v -o out.vcf.gz in.vcf.gz
 ```
 
-Or serve the same engine over HTTP (a valid API token is printed to stdout on startup):
+See the **[Quick start guide](docs/quickstart.md)** for a fuller walkthrough.
 
-```sh
-varhub server                                   # needs a [server] block in config.toml
-curl -H "Authorization: Bearer $TOKEN" -d '{"locus":"chr1:115256529:T:C"}' \
-     http://127.0.0.1:8080/v1/annotate          # → {"job_id": …}; poll /v1/jobs/{id}/results
-```
-
-See the **[Quick start guide](docs/quickstart.md)** for a fuller walkthrough, and the
-**[REST API](docs/rest-api.md)** page for the server.
+For an HTTP API and a web UI over the same engine, see
+**[varianthub-web](https://github.com/compgenlab/varianthub-web)**.
 
 ## Documentation
 
@@ -86,12 +81,11 @@ Full documentation lives in **[`docs/`](docs/README.md)**:
 - **[Parallel & distributed annotation](docs/parallel.md)** — `-t N` source fan-out on one
   machine, and a `cgkit vcf-split` → array → `cgkit vcf-concat` job array across a scheduler.
 - **[Registry](docs/registry.md)** — pulling pre-made sources, and submitting your own.
-- **[REST API](docs/rest-api.md)** — the async annotate server (`varhub server`).
 
 ## Status
 
-Early but working: an interactive CLI on a SQLite backend, plus an asynchronous REST annotate
-server (`varhub server`). A Postgres backend is planned. Cohort-style filtering ("which loci are
+Early but working: an interactive CLI on a SQLite backend. A Postgres backend is planned.
+Cohort-style filtering ("which loci are
 pathogenic *and* rare") is intentionally out of scope — VariantHub produces the annotations; a
 consumer filters them.
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -318,10 +319,7 @@ func cmdAnnotation(cfgPath string, args []string) error {
 	case "add":
 		return cmdAnnotationAdd(cfg, args[1:])
 	case "list":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: annotation list <snapshot>")
-		}
-		return cmdAnnotationList(cfg, args[1])
+		return cmdAnnotationList(cfg, args[1:])
 	default:
 		return fmt.Errorf("unknown annotation subcommand %q (want add|list)", args[0])
 	}
@@ -419,10 +417,64 @@ func builtinSourceOf(frag *config.Snapshot) *config.Source {
 }
 
 // cmdAnnotationList lists a snapshot's annotations (marking the default set).
-func cmdAnnotationList(cfg *config.Config, snapName string) error {
+// annotationInfo is one annotation in the `--format json` listing.
+type annotationInfo struct {
+	Name        string `json:"name"`
+	Field       string `json:"field,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Description string `json:"description,omitempty"`
+	Builtin     string `json:"builtin,omitempty"`
+	Default     bool   `json:"default"`
+	Source      string `json:"source"`     // the source that produces it
+	SourceRef   string `json:"source_ref"` // "name:version"
+	SourceTitle string `json:"source_title,omitempty"`
+	SourceKind  string `json:"source_kind"` // builtin|tool|genelist|data
+}
+
+// annotationListing is the `--format json` document.
+type annotationListing struct {
+	Snapshot    string           `json:"snapshot"`
+	Title       string           `json:"title,omitempty"`
+	Assembly    string           `json:"assembly,omitempty"`
+	Defaults    []string         `json:"defaults"`
+	Annotations []annotationInfo `json:"annotations"`
+}
+
+// sourceKind classifies a source for display.
+func sourceKind(s config.Source) string {
+	switch {
+	case s.IsBuiltinSource():
+		return "builtin"
+	case s.IsTool():
+		return "tool"
+	case s.IsGeneList():
+		return "genelist"
+	default:
+		return "data"
+	}
+}
+
+func cmdAnnotationList(cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("annotation list", flag.ContinueOnError)
+	format := fs.String("format", "text", "output format: text|json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return fmt.Errorf("usage: annotation list [--format text|json] <snapshot>")
+	}
+	snapName := rest[0]
+
 	snap, err := cfg.LoadSnapshot(snapName)
 	if err != nil {
 		return err
+	}
+	if *format == "json" {
+		return writeAnnotationJSON(snap)
+	}
+	if *format != "text" {
+		return fmt.Errorf("unknown format %q (want text|json)", *format)
 	}
 	for _, a := range snap.Annotations {
 		marker := " "
@@ -444,6 +496,65 @@ func cmdAnnotationList(cfg *config.Config, snapName string) error {
 	}
 	fmt.Printf("\n* = default. `annotate` with no flag applies: %s\n", defaultSummary(keys))
 	return nil
+}
+
+// writeAnnotationJSON emits the snapshot's annotation catalog as JSON.
+//
+// This exists for programmatic consumers — varianthub-web renders a results
+// table whose columns depend on the job's snapshot, and needs each annotation's
+// type and producing source to label and align them. Re-deriving that by parsing
+// source fragments elsewhere would be a second implementation of this repo's
+// config model, free to drift from it.
+func writeAnnotationJSON(snap *config.Snapshot) error {
+	// Index sources by name so each annotation can name its producer. Builtin
+	// containers rewrite a derived annotation's Source to the builtin's own name,
+	// so match those through the container's nested annotations.
+	byName := map[string]config.Source{}
+	builtinOwner := map[string]config.Source{}
+	for _, src := range snap.Sources {
+		byName[src.Name] = src
+		if src.IsBuiltinSource() {
+			for _, a := range src.Annotations {
+				builtinOwner[a.Builtin] = src
+			}
+		}
+	}
+
+	out := annotationListing{
+		Snapshot:    snap.Name,
+		Title:       snap.DisplayTitle(),
+		Assembly:    snap.Assembly,
+		Defaults:    []string{},
+		Annotations: []annotationInfo{},
+	}
+	for _, a := range snap.Annotations {
+		if a.Name == "" {
+			continue
+		}
+		src, ok := byName[a.Source]
+		if !ok {
+			src = builtinOwner[a.Source]
+		}
+		out.Annotations = append(out.Annotations, annotationInfo{
+			Name:        a.Name,
+			Field:       a.Field,
+			Type:        a.Type,
+			Description: a.Description,
+			Builtin:     a.Builtin,
+			Default:     a.Default,
+			Source:      src.Name,
+			SourceRef:   src.Name + ":" + src.Version,
+			SourceTitle: src.Title,
+			SourceKind:  sourceKind(src),
+		})
+		if a.Default {
+			out.Defaults = append(out.Defaults, a.Name)
+		}
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 func defaultSummary(keys []string) string {

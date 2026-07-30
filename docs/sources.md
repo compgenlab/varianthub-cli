@@ -48,6 +48,20 @@ checksum_index = "md5:…"
   strips `localpath`.
 - **`checksum`/`checksum_index`** are optional (`md5`|`sha1`|`sha256`); verified while
   downloading when present. The value may be a URL to a checksum file.
+- **Data must be coordinate sorted** when varhub has to build the index itself (no
+  `url_index`, and no `.tbi`/`.csi` published beside the data). Two rules: positions
+  ascend within a contig — equal positions are fine, so a multiallelic site split across
+  lines is not a problem — and each contig appears as one contiguous block, though the
+  order of the contigs themselves does not matter. Unsorted input is refused rather than
+  indexed, because an index built over unsorted data is structurally valid and simply
+  returns incomplete results. This applies to whatever a `[[sources.build]]` recipe emits
+  and to tool output (VEP with `--fork`, and ANNOVAR, do not preserve record order), so
+  sort in the recipe's last step:
+
+  ```sh
+  (grep '^#' out.vcf; grep -v '^#' out.vcf | sort -k1,1 -k2,2n) \
+      | varhub bgzip -p vcf -o {output}
+  ```
 
 ### Multi-file data sources
 

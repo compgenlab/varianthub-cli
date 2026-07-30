@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/compgenlab/cghts/htsio/tabix"
+	"github.com/compgenlab/varianthub-cli/internal/htsidx"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
@@ -560,7 +561,7 @@ func ensureIndex(ctx context.Context, f config.SourceFile, target, format string
 	if err != nil {
 		return "", err
 	}
-	if err := tabix.NewIndexWriter(opts).WriteIndex(target); err != nil {
+	if err := htsidx.WriteIndex(opts, target); err != nil {
 		return "", fmt.Errorf("build index: %w", err)
 	}
 	return "built", nil

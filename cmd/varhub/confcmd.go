@@ -575,6 +575,7 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	fs.IntVar(jobs, "j", 1, "number of files to download at once (shorthand)")
 	quiet := fs.Bool("quiet", false, "suppress per-step progress logs")
 	keepTemp := fs.Bool("keep-temp", false, "keep per-source scratch dirs (build/tool setup) for debugging")
+	keepRaw := fs.Bool("keep-raw", false, "keep a GTF's unprocessed download after it is bgzipped and indexed (uses ~2x the space)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -604,14 +605,20 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 
 	// fetch.Snapshot handles data sources (download/build) + tool sources (image
 	// acquire + one-time setup) in one pass.
-	results, err := fetch.Snapshot(ctx, cfg, snap, *source, *force, *jobs)
+	results, err := fetch.Snapshot(ctx, cfg, snap, *source, *force, *keepRaw, *jobs)
 	if err != nil {
 		return err
 	}
+	var freed int64
 	for _, r := range results {
 		fmt.Println(r.Describe())
+		freed += r.Freed
 	}
 	fmt.Printf("downloaded %d item(s) for snapshot %s (cache: %s)\n", len(results), snap.Name, cfg.CacheDirAbs())
+	if freed > 0 {
+		fmt.Printf("reclaimed %s by removing unprocessed GTF downloads (--keep-raw to keep them)\n",
+			fetch.HumanBytes(freed))
+	}
 	return nil
 }
 

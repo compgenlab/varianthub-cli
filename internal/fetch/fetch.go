@@ -33,6 +33,36 @@ type Result struct {
 	Source string // data_source_id
 	Data   string // "downloaded" | "skipped" | "local" | "N downloaded, M skipped"
 	Index  string // "reused" | "downloaded" | "built" | "present" | "linked" | aggregate, or "-"
+	Freed  int64  // bytes reclaimed by pruning a converted GTF's original
+}
+
+// pruneRaw removes a converted GTF's original, logging rather than failing the
+// download: the data is already usable, so a stuck original is untidy, not fatal.
+func pruneRaw(cfg *config.Config, src config.Source) int64 {
+	freed, err := PruneRawGTF(cfg, src)
+	if err != nil {
+		logf("%s: %v", src.ID(), err)
+		return 0
+	}
+	if freed > 0 {
+		logf("%s: removed the unprocessed download (%s reclaimed; --keep-raw to keep it)",
+			src.ID(), HumanBytes(freed))
+	}
+	return freed
+}
+
+// HumanBytes formats a byte count for progress output.
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < 3; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // fileResult is the per-file outcome (data + index status).
@@ -77,7 +107,7 @@ func algoOf(spec string) string {
 // (jobs<1 ⇒ 1, sequential). Data sources are downloaded/built; type="tool" sources
 // have their image acquired + one-time setup run (sequentially); builtins are skipped.
 // If only != "" it restricts to that source name (or name:version). force re-does work.
-func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, only string, force bool, jobs int) ([]Result, error) {
+func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, only string, force, keepRaw bool, jobs int) ([]Result, error) {
 	if jobs < 1 {
 		jobs = 1
 	}
@@ -145,6 +175,9 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 				return nil, fmt.Errorf("%s: %w", w.src.ID(), err)
 			}
 			r.Index = status
+			if !keepRaw {
+				r.Freed = pruneRaw(cfg, w.src)
+			}
 		}
 		results = append(results, r)
 	}
@@ -374,7 +407,7 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 // Source downloads a source's file(s) sequentially and ensures each is
 // tabix-indexed. A builtin source is a no-op. (Snapshot fetches across sources
 // concurrently; this is the single-source, in-order path.)
-func Source(ctx context.Context, cfg *config.Config, src config.Source, force bool) (Result, error) {
+func Source(ctx context.Context, cfg *config.Config, src config.Source, force, keepRaw bool) (Result, error) {
 	if src.IsBuiltinSource() {
 		return Result{Source: src.ID(), Data: "-", Index: "-"}, nil
 	}
@@ -394,6 +427,9 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force bo
 			return Result{}, fmt.Errorf("%s: %w", src.ID(), err)
 		}
 		r.Index = status
+		if !keepRaw {
+			r.Freed = pruneRaw(cfg, src)
+		}
 	}
 	return r, nil
 }
@@ -550,21 +586,29 @@ func Missing(cfg *config.Config, src config.Source) []string {
 	}
 	var missing []string
 	for _, f := range cfg.ResolveSourceFiles(src) {
-		if !fileExists(f.Path) {
-			missing = append(missing, f.Path)
-			continue
-		}
 		if src.IsGTFSource() {
-			// A GTF is queried via a bgzip+tabix index built under cache_dir; report
-			// it missing until `varhub download` has produced it (unless the raw file
-			// is already a bgzipped GTF with a sidecar index).
-			if strings.HasSuffix(f.Path, ".gz") && (fileExists(f.Path+".tbi") || fileExists(f.Path+".csi")) {
-				continue
+			// A GTF is queried through the bgzip+tabix copy under cache_dir, and
+			// that copy is sufficient on its own — `download` prunes the original
+			// once it has been converted. So check the usable file first: testing
+			// the raw up front reports a perfectly good source as missing.
+			if strings.HasSuffix(f.Path, ".gz") && fileExists(f.Path) &&
+				(fileExists(f.Path+".tbi") || fileExists(f.Path+".csi")) {
+				continue // shipped pre-indexed: the raw IS the queried file
 			}
 			idx := cfg.ResolveGTFIndexPath(src)
-			if !fileExists(idx) || !(fileExists(idx+".tbi") || fileExists(idx+".csi")) {
+			if fileExists(idx) && (fileExists(idx+".tbi") || fileExists(idx+".csi")) {
+				continue
+			}
+			// Nothing usable. Name whichever piece is actually absent.
+			if !fileExists(f.Path) {
+				missing = append(missing, f.Path)
+			} else {
 				missing = append(missing, idx+" (GTF index)")
 			}
+			continue
+		}
+		if !fileExists(f.Path) {
+			missing = append(missing, f.Path)
 			continue
 		}
 		if src.IsBBISource() {
@@ -653,11 +697,9 @@ func presetFor(format string) (*tabix.WriterOpts, error) {
 // status is "pre-indexed" | "reused" | "built". force rebuilds the cached index.
 func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, status string, err error) {
 	raw := cfg.ResolveSourcePath(src)
-	if !fileExists(raw) {
-		return "", "", fmt.Errorf("GTF source file %s not found (run `varhub download`)", raw)
-	}
 	// A .gz raw with a sidecar tabix index is already usable directly.
-	if strings.HasSuffix(raw, ".gz") && (fileExists(raw+".tbi") || fileExists(raw+".csi")) {
+	if strings.HasSuffix(raw, ".gz") && fileExists(raw) &&
+		(fileExists(raw+".tbi") || fileExists(raw+".csi")) {
 		return raw, "pre-indexed", nil
 	}
 	idx := cfg.ResolveGTFIndexPath(src)
@@ -666,6 +708,12 @@ func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, 
 	}
 	if !force && fileExists(idx) && (fileExists(idx+".tbi") || fileExists(idx+".csi")) {
 		return idx, "reused", nil
+	}
+	// The raw is needed only to *build* the index. Checking it here rather than
+	// up front is what lets `download` prune the original after a successful
+	// conversion: the reuse path above then keeps working without it.
+	if !fileExists(raw) {
+		return "", "", fmt.Errorf("GTF source file %s not found (run `varhub download`)", raw)
 	}
 	if err := buildGTFIndex(raw, idx); err != nil {
 		return "", "", fmt.Errorf("index GTF %s: %w", raw, err)
@@ -678,6 +726,42 @@ func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, 
 // memory footprint (spilling to temp BGZF), so even a whole GENCODE GTF indexes in
 // one pass without loading it all into memory. On any failure the partial output +
 // index are removed so a later run rebuilds rather than treating them as cached.
+// PruneRawGTF deletes a GTF's downloaded original once it has been converted to
+// the bgzipped, tabix-indexed copy that queries actually use.
+//
+// GENCODE and friends ship plain gzip, which tabix cannot seek into, so the
+// conversion writes a second file — larger than the original, because BGZF
+// resets the compressor every block to make random access possible. Keeping both
+// doubles the footprint for a file nothing reads again except a re-index, and
+// `--force` re-downloads anyway.
+//
+// Refuses to act unless the derived file *and* its index are both present, and
+// never touches a raw that is itself the queried file (a source that shipped
+// pre-indexed). Returns the bytes freed; 0 when there was nothing to prune.
+func PruneRawGTF(cfg *config.Config, src config.Source) (freed int64, err error) {
+	raw := cfg.ResolveSourcePath(src)
+	idx := cfg.ResolveGTFIndexPath(src)
+	if raw == idx {
+		return 0, nil
+	}
+	// A pre-indexed raw is what queries read. Deleting it would remove the data.
+	if fileExists(raw+".tbi") || fileExists(raw+".csi") {
+		return 0, nil
+	}
+	// Only prune when a usable replacement exists, or this deletes the only copy.
+	if !fileExists(idx) || !(fileExists(idx+".tbi") || fileExists(idx+".csi")) {
+		return 0, nil
+	}
+	fi, statErr := os.Stat(raw)
+	if statErr != nil {
+		return 0, nil // already gone
+	}
+	if err := os.Remove(raw); err != nil {
+		return 0, fmt.Errorf("prune %s: %w", raw, err)
+	}
+	return fi.Size(), nil
+}
+
 func buildGTFIndex(raw, idx string) (err error) {
 	if err := os.MkdirAll(filepath.Dir(idx), 0o755); err != nil {
 		return err

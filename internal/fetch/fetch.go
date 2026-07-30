@@ -21,6 +21,7 @@ import (
 
 	"github.com/compgenlab/cghts/htsio/tabix"
 	"github.com/compgenlab/varianthub-cli/internal/htsidx"
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
@@ -112,13 +113,17 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 	if jobs < 1 {
 		jobs = 1
 	}
+	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
+		return nil, err
+	}
+	remoteCache := objstore.IsRemote(cfg.CacheDirAbs())
 	type work struct {
 		src     config.Source
 		files   []config.SourceFile
 		results []fileResult // one per file (distinct indices ⇒ safe concurrent writes)
 	}
 	var works []*work
-	var builds, tools []config.Source
+	var builds, tools, remoteGTFs []config.Source
 	matched := false
 	for _, s := range snap.Sources {
 		if s.IsBuiltinSource() {
@@ -134,6 +139,11 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		}
 		if s.Build != nil { // built from a recipe, run sequentially below
 			builds = append(builds, s)
+			continue
+		}
+		if remoteCache && s.IsGTFSource() {
+			// Download, convert and upload as one staged unit — see fetchGTFRemote.
+			remoteGTFs = append(remoteGTFs, s)
 			continue
 		}
 		files := cfg.ResolveSourceFiles(s)
@@ -165,7 +175,14 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(works)+len(builds)+len(tools))
+	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs))
+	for _, s := range remoteGTFs {
+		r, err := fetchGTFRemote(ctx, cfg, s, force, keepRaw)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
 	for _, w := range works {
 		r := aggregate(w.src, w.results)
 		// GTF sources are bgzip+tabix-indexed (cached, reused) so the gene model can
@@ -208,8 +225,15 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 func buildSource(ctx context.Context, cfg *config.Config, src config.Source, force bool) (Result, error) {
 	srcDir := cfg.SourceDir(src.Name, src.Version) // co-located assets live here
 	out := cfg.ResolveSourcePath(src)
-	hasIdx := fileExists(out+".tbi") || fileExists(out+".csi")
-	if fileExists(out) && hasIdx && !force {
+	outPresent, err := locatorExists(ctx, out)
+	if err != nil {
+		return Result{}, err
+	}
+	_, hasIdx, err := anyIndexAt(ctx, out)
+	if err != nil {
+		return Result{}, err
+	}
+	if outPresent && hasIdx && !force {
 		logf("%s: already built (cached) — use --force to rebuild", src.ID())
 		return Result{Source: src.ID(), Data: "built (cached)", Index: "reused"}, nil
 	}
@@ -271,6 +295,28 @@ func buildSource(ctx context.Context, cfg *config.Config, src config.Source, for
 	}
 
 	logf("  caching → %s", out)
+
+	// A remote cache is published from the build workdir: the recipe output is
+	// already local and already temporary, so it is indexed and verified where
+	// it stands and only the verified pair is uploaded.
+	if objstore.IsRemote(out) {
+		idx, err := ensureIndex(ctx, config.SourceFile{Path: built}, built, src.Format, force)
+		if err != nil {
+			return Result{}, fmt.Errorf("%s: index: %w", src.ID(), err)
+		}
+		r, err := tabix.NewReader(built)
+		if err != nil {
+			return Result{}, fmt.Errorf("%s: verify %s: %w", src.ID(), built, err)
+		}
+		r.Close()
+		st := &staging{work: built} // dir left empty: cleanupTemp owns the workdir
+		if err := st.publish(ctx, out, "", ".tbi", ".csi"); err != nil {
+			return Result{}, err
+		}
+		logf("  index: %s, uploaded", idx)
+		return Result{Source: src.ID(), Data: "built", Index: idx}, nil
+	}
+
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return Result{}, err
 	}
@@ -282,7 +328,9 @@ func buildSource(ctx context.Context, cfg *config.Config, src config.Source, for
 			moveFile(built+ext, out+ext)
 		}
 	}
-	idx, err := ensureIndex(ctx, config.SourceFile{Path: out}, out, src.Format, false)
+	// force matters here: the data file was just replaced, so a sidecar left by
+	// the previous build describes bytes that no longer exist.
+	idx, err := ensureIndex(ctx, config.SourceFile{Path: out}, out, src.Format, force)
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: index: %w", src.ID(), err)
 	}
@@ -412,6 +460,12 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 	if src.IsBuiltinSource() {
 		return Result{Source: src.ID(), Data: "-", Index: "-"}, nil
 	}
+	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
+		return Result{}, err
+	}
+	if objstore.IsRemote(cfg.CacheDirAbs()) && src.IsGTFSource() {
+		return fetchGTFRemote(ctx, cfg, src, force, keepRaw)
+	}
 	files := cfg.ResolveSourceFiles(src)
 	results := make([]fileResult, len(files))
 	for i, f := range files {
@@ -462,6 +516,10 @@ func fetchFile(ctx context.Context, f config.SourceFile, format, label string, f
 		}
 		r.Close()
 		return "local", idx, nil
+	}
+
+	if objstore.IsRemote(f.Path) {
+		return fetchFileRemote(ctx, f, format, label, selfIndexed, force)
 	}
 
 	target := f.Path
@@ -584,6 +642,9 @@ func Missing(cfg *config.Config, src config.Source) []string {
 			missing = append(missing, p+" (genes_file)")
 		}
 		return missing
+	}
+	if objstore.IsRemote(cfg.CacheDirAbs()) {
+		return missingRemote(context.Background(), cfg, src)
 	}
 	var missing []string
 	for _, f := range cfg.ResolveSourceFiles(src) {
@@ -744,6 +805,9 @@ func PruneRawGTF(cfg *config.Config, src config.Source) (freed int64, err error)
 	idx := cfg.ResolveGTFIndexPath(src)
 	if raw == idx {
 		return 0, nil
+	}
+	if objstore.IsRemote(raw) {
+		return pruneRawGTFRemote(context.Background(), raw, idx)
 	}
 	// A pre-indexed raw is what queries read. Deleting it would remove the data.
 	if fileExists(raw+".tbi") || fileExists(raw+".csi") {
@@ -948,4 +1012,253 @@ func summarizeIndex(m map[string]int, n int) string {
 // Describe renders a one-line summary of a result.
 func (r Result) Describe() string {
 	return fmt.Sprintf("%-24s data:%-28s index:%s", r.Source, r.Data, r.Index)
+}
+
+// fetchFileRemote provisions one file into an object-store cache.
+//
+// Everything happens on a local staging copy first — checksum, index, and the
+// tabix open that proves the pair actually works — because none of those can be
+// done against a bucket, and because an object that failed verification must
+// never be uploaded at all. Only a verified pair is published.
+func fetchFileRemote(ctx context.Context, f config.SourceFile, format, label string,
+	selfIndexed, force bool) (data, index string, err error) {
+
+	base := objstore.Base(f.Path)
+
+	// Complete means the data *and* its index are both present. Checking them
+	// together matters: an interrupted run can leave data with no index, and
+	// treating that as cached would provision a source that cannot be queried.
+	if !force {
+		ok, err := locatorExists(ctx, f.Path)
+		if err != nil {
+			return "", "", err
+		}
+		if ok {
+			if selfIndexed {
+				logf("%s: cached %s", label, base)
+				return "skipped", "none", nil
+			}
+			if _, hasIdx, err := anyIndexAt(ctx, f.Path); err != nil {
+				return "", "", err
+			} else if hasIdx {
+				logf("%s: cached %s", label, base)
+				return "skipped", "reused", nil
+			}
+			logf("%s: %s has no index in the cache; rebuilding it", label, base)
+		}
+	}
+
+	st, err := newStaging(f.Path)
+	if err != nil {
+		return "", "", err
+	}
+	defer st.close()
+
+	if a := algoOf(f.Checksum); a != "" {
+		logf("%s: downloading %s (verifying %s)", label, base, a)
+	} else {
+		logf("%s: downloading %s", label, base)
+	}
+	sum, err := resolveChecksum(ctx, f.Checksum, base)
+	if err != nil {
+		return "", "", err
+	}
+	if err := download(ctx, f.URL, st.work, sum); err != nil {
+		return "", "", err
+	}
+
+	if selfIndexed {
+		if err := st.publish(ctx, f.Path, f.Checksum); err != nil {
+			return "", "", err
+		}
+		logf("%s: uploaded %s", label, base)
+		return "downloaded", "none", nil
+	}
+
+	index, err = ensureIndex(ctx, f, st.work, format, true)
+	if err != nil {
+		return "", "", err
+	}
+	// Prove the pair works before it becomes the copy everyone reads.
+	r, err := tabix.NewReader(st.work)
+	if err != nil {
+		return "", "", fmt.Errorf("verify index %s: %w", base, err)
+	}
+	r.Close()
+
+	if err := st.publish(ctx, f.Path, f.Checksum, ".tbi", ".csi"); err != nil {
+		return "", "", err
+	}
+	logf("%s: index %s (%s), uploaded", label, base, index)
+	return "downloaded", index, nil
+}
+
+// fetchGTFRemote provisions a GTF source into an object-store cache as one unit.
+//
+// GTF is handled apart from the generic path because its useful artifact is not
+// what was downloaded: varhub bgzips and tabix-indexes the original, and prunes
+// the original afterwards unless --keep-raw. Running that through the generic
+// path would upload a multi-gigabyte original only to delete it again, so the
+// original is staged, converted locally, and only the converted pair is
+// published — which is what the local cache ends up holding anyway.
+func fetchGTFRemote(ctx context.Context, cfg *config.Config, src config.Source,
+	force, keepRaw bool) (Result, error) {
+
+	label := src.ID()
+	files := cfg.ResolveSourceFiles(src)
+	if len(files) != 1 {
+		return Result{}, fmt.Errorf("%s: a GTF source must resolve to one file, got %d", label, len(files))
+	}
+	f := files[0]
+	idx := cfg.ResolveGTFIndexPath(src)
+	if idx == f.Path {
+		return Result{}, fmt.Errorf("%s: GTF index path %s collides with the source file", label, idx)
+	}
+
+	if !force {
+		ok, err := locatorExists(ctx, idx)
+		if err != nil {
+			return Result{}, err
+		}
+		if _, hasIdx, err2 := anyIndexAt(ctx, idx); err == nil && err2 == nil && ok && hasIdx {
+			logf("%s: cached %s", label, objstore.Base(idx))
+			return Result{Source: label, Data: "skipped", Index: "reused"}, nil
+		}
+	}
+
+	st, err := newStaging(f.Path)
+	if err != nil {
+		return Result{}, err
+	}
+	defer st.close()
+
+	sum, err := resolveChecksum(ctx, f.Checksum, objstore.Base(f.Path))
+	if err != nil {
+		return Result{}, err
+	}
+	logf("%s: downloading %s", label, objstore.Base(f.Path))
+	if err := download(ctx, f.URL, st.work, sum); err != nil {
+		return Result{}, err
+	}
+
+	// Convert beside the original, then publish under the index locator.
+	built := filepath.Join(st.dir, objstore.Base(idx))
+	if built == st.work {
+		return Result{}, fmt.Errorf("%s: converted GTF would overwrite the original", label)
+	}
+	logf("%s: bgzip + tabix indexing", label)
+	if err := buildGTFIndex(st.work, built); err != nil {
+		return Result{}, fmt.Errorf("index GTF %s: %w", objstore.Base(f.Path), err)
+	}
+
+	conv := &staging{dir: st.dir, work: built}
+	if err := conv.publish(ctx, idx, "", ".tbi", ".csi"); err != nil {
+		return Result{}, err
+	}
+	res := Result{Source: label, Data: "downloaded", Index: "built"}
+
+	if keepRaw {
+		if err := st.publish(ctx, f.Path, f.Checksum); err != nil {
+			return Result{}, err
+		}
+	} else {
+		// Nothing to reclaim remotely — the original was never uploaded — but
+		// report the bytes not spent, so the output matches the local case.
+		if fi, err := os.Stat(st.work); err == nil {
+			res.Freed = fi.Size()
+		}
+		// A previous --keep-raw run may have left one in the bucket.
+		if err := locatorRemove(ctx, f.Path); err != nil {
+			logf("%s: %v", label, err)
+		}
+	}
+	logf("%s: uploaded %s", label, objstore.Base(idx))
+	return res, nil
+}
+
+// pruneRawGTFRemote is PruneRawGTF for an object-store cache. It applies the
+// same guard: never remove the original unless a usable converted copy is
+// actually in place, or the prune deletes the only data there is.
+func pruneRawGTFRemote(ctx context.Context, raw, idx string) (int64, error) {
+	if _, hasRawIdx, err := anyIndexAt(ctx, raw); err != nil {
+		return 0, err
+	} else if hasRawIdx {
+		return 0, nil // the original is what queries read
+	}
+	ok, err := locatorExists(ctx, idx)
+	if err != nil || !ok {
+		return 0, err
+	}
+	if _, hasIdx, err := anyIndexAt(ctx, idx); err != nil || !hasIdx {
+		return 0, err
+	}
+	size, present, err := locatorSize(ctx, raw)
+	if err != nil || !present {
+		return 0, err
+	}
+	if err := locatorRemove(ctx, raw); err != nil {
+		return 0, fmt.Errorf("prune %s: %w", raw, err)
+	}
+	return size, nil
+}
+
+// missingRemote is Missing for an object-store cache.
+//
+// It mirrors the local rules rather than restating them differently: a GTF is
+// satisfied by the converted copy alone, a BBI needs no sidecar, and everything
+// else needs data plus an index. A locator that cannot be reached is reported
+// as missing with the reason attached, because "run `varhub download`" is the
+// wrong advice when the real problem is a bad endpoint or expired credentials.
+func missingRemote(ctx context.Context, cfg *config.Config, src config.Source) []string {
+	var missing []string
+	note := func(loc string, err error) { missing = append(missing, fmt.Sprintf("%s (%v)", loc, err)) }
+
+	for _, f := range cfg.ResolveSourceFiles(src) {
+		if src.IsGTFSource() {
+			idx := cfg.ResolveGTFIndexPath(src)
+			ok, err := locatorExists(ctx, idx)
+			if err != nil {
+				note(idx, err)
+				continue
+			}
+			if ok {
+				if _, hasIdx, err := anyIndexAt(ctx, idx); err != nil {
+					note(idx, err)
+					continue
+				} else if hasIdx {
+					continue
+				}
+			}
+			// Fall back to a pre-indexed original, the same as the local rule.
+			if _, hasRawIdx, err := anyIndexAt(ctx, f.Path); err == nil && hasRawIdx {
+				if ok, err := locatorExists(ctx, f.Path); err == nil && ok {
+					continue
+				}
+			}
+			missing = append(missing, idx+" (GTF index)")
+			continue
+		}
+
+		ok, err := locatorExists(ctx, f.Path)
+		if err != nil {
+			note(f.Path, err)
+			continue
+		}
+		if !ok {
+			missing = append(missing, f.Path)
+			continue
+		}
+		if src.IsBBISource() {
+			continue
+		}
+		_, hasIdx, err := anyIndexAt(ctx, f.Path)
+		if err != nil {
+			note(f.Path, err)
+			continue
+		}
+		if !hasIdx {
+			missing = append(missing, f.Path+" (index)")
+		}
+	}
+	return missing
 }

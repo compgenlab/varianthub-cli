@@ -17,6 +17,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
+
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
 	"github.com/compgenlab/varianthub-cli/internal/model"
 )
@@ -1336,10 +1338,17 @@ func (c *Config) DatabasePathAbs() string {
 	return c.resolveDir(c.Database.Path)
 }
 
-// CacheDirAbs is the source-file cache directory resolved relative to the config
+// CacheDirAbs is the source-file cache location resolved relative to the config
 // file. Defaults to "<data_dir>/cache" (or "cache") when cache_dir is unset.
+//
+// An s3:// cache_dir is returned verbatim: it is a locator, not a path, so
+// resolving it against the config dir would be meaningless and filepath.Clean
+// would eat the scheme's second slash.
 func (c *Config) CacheDirAbs() string {
 	cd := c.CacheDir
+	if objstore.IsRemote(cd) {
+		return cd
+	}
 	if cd == "" {
 		if c.DataDir != "" {
 			cd = filepath.Join(c.DataDir, "cache")
@@ -1360,13 +1369,13 @@ func (c *Config) ResolveSourcePath(s Source) string {
 		return c.resolveLocal(s.LocalPath)
 	}
 	if s.Build != nil {
-		return filepath.Join(c.CacheDirAbs(), s.Name, s.Version, s.BuildOutput())
+		return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.BuildOutput())
 	}
 	base := path.Base(s.URL)
 	if base == "" || base == "." || base == "/" {
 		base = s.Name + ".gz"
 	}
-	return filepath.Join(c.CacheDirAbs(), s.Name, s.Version, base)
+	return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, base)
 }
 
 // ResolveGTFIndexPath is the canonical on-disk location for a GTF source's
@@ -1374,7 +1383,7 @@ func (c *Config) ResolveSourcePath(s Source) string {
 // builds it once (at download, or lazily on first annotate) so the gene model can
 // be queried by position instead of loaded whole into memory.
 func (c *Config) ResolveGTFIndexPath(s Source) string {
-	return filepath.Join(c.CacheDirAbs(), s.Name, s.Version, s.Name+".gtf.gz")
+	return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.Name+".gtf.gz")
 }
 
 // resolveLocalIndex returns the resolved on-disk index path when LocalPathIndex is

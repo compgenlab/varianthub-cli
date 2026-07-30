@@ -27,6 +27,41 @@ cached under `cache_dir` keyed by `name/version`, so two snapshots referencing t
 source reuse one download. Checksums, when present, are verified while streaming (a
 mismatch fails and leaves no partial file).
 
+### Provisioning into an object store
+
+`cache_dir` may be an `s3://bucket/prefix` locator instead of a directory, and
+`varhub download --to s3://bucket/prefix` overrides it for one run. The same resolution
+that decides a local cache path decides the object key, so a source cached at
+`<cache>/clinvar/2026-01/clinvar.vcf.gz` locally lands at exactly that key remotely.
+
+Provisioning still needs local scratch, because a checksum cannot be verified and a tabix
+index cannot be built against a bucket. Each file is staged locally, verified, indexed,
+opened to prove the pair works, and only then uploaded — so the scratch requirement is the
+**largest single file**, not the whole snapshot. Nothing that failed verification is ever
+uploaded.
+
+Details worth knowing:
+
+- **Uploads are multipart**, so sources in the tens of gigabytes work. A failed upload is
+  aborted, leaving no partial object a later run could mistake for a complete one.
+- **The index is uploaded before the data.** A run interrupted between the two leaves a
+  source that looks incomplete and gets redone, rather than one that looks complete but
+  cannot be queried.
+- **Re-running is a no-op.** A source counts as present only when its data *and* index are
+  both there; `--force` re-downloads and re-uploads.
+- **GTF sources publish only the converted form.** varhub bgzips and tabix-indexes the
+  original and normally prunes it, so uploading the original first would just be paying to
+  transfer something that gets deleted. `--keep-raw` uploads it as well.
+- **Credentials** come from the standard AWS chain — environment, shared config, then an
+  instance or container role — so a deployed pod can use an assumed role rather than static
+  keys. `AWS_ENDPOINT_URL` points at a non-AWS, S3-compatible target and switches on
+  path-style addressing.
+
+Reading annotations directly from an object store is **not supported yet**: `annotate`
+still needs a local `cache_dir`. Provisioning a bucket and annotating from it are separate
+pieces of work, and `annotate` says so plainly rather than failing as if nothing had been
+downloaded.
+
 ### Build sources
 
 Some data needs preprocessing before tabix can use it (e.g. REVEL: many CSV zips →

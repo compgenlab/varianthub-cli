@@ -576,6 +576,7 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	quiet := fs.Bool("quiet", false, "suppress per-step progress logs")
 	keepTemp := fs.Bool("keep-temp", false, "keep per-source scratch dirs (build/tool setup) for debugging")
 	keepRaw := fs.Bool("keep-raw", false, "keep a GTF's unprocessed download after it is bgzipped and indexed (uses ~2x the space)")
+	to := fs.String("to", "", "provision into this cache location instead of cache_dir (a directory, or s3://bucket/prefix)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -589,6 +590,12 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	}
 	if err := applyTempDir(cfg.TempDir); err != nil {
 		return err
+	}
+	// --to overrides where this run provisions to. The same locator resolution
+	// then decides every cached path, so nothing downstream needs to know the
+	// destination was chosen on the command line rather than in config.toml.
+	if *to != "" {
+		cfg.CacheDir = *to
 	}
 	snap, err := cfg.LoadSnapshot(snapshot)
 	if err != nil {

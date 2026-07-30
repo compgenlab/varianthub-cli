@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/compgenlab/cghts/htsio/tabix"
+	"github.com/compgenlab/varianthub-cli/internal/htsidx"
 
 	"github.com/compgenlab/varianthub-cli/internal/config"
 )
@@ -309,7 +310,7 @@ func ensureIndex(path, format string) error {
 	if err != nil {
 		return err
 	}
-	return tabix.NewIndexWriter(opts).WriteIndex(path)
+	return htsidx.WriteIndex(opts, path)
 }
 
 func preset(format string) (*tabix.WriterOpts, error) {

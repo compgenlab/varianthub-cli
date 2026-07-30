@@ -9,6 +9,7 @@ import (
 
 	"github.com/compgenlab/cghts/htsio/bgzf"
 	"github.com/compgenlab/cghts/htsio/tabix"
+	"github.com/compgenlab/varianthub-cli/internal/htsidx"
 )
 
 // cmdBgzip and cmdTabix are hidden subcommands that mimic the `bgzip` and `tabix`
@@ -125,7 +126,7 @@ func cmdBgzip(args []string) error {
 		if err != nil {
 			return fmt.Errorf("bgzip: %w", err)
 		}
-		if err := tabix.NewIndexWriter(opts).WriteIndex(*out); err != nil {
+		if err := htsidx.WriteIndex(opts, *out); err != nil {
 			return fmt.Errorf("bgzip: index %s: %w", *out, err)
 		}
 	}
@@ -148,7 +149,7 @@ func cmdTabix(args []string) error {
 	if err != nil {
 		return fmt.Errorf("tabix: %w", err)
 	}
-	if err := tabix.NewIndexWriter(opts).WriteIndex(rest[0]); err != nil {
+	if err := htsidx.WriteIndex(opts, rest[0]); err != nil {
 		return fmt.Errorf("tabix: %s: %w", rest[0], err)
 	}
 	return nil

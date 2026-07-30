@@ -15,6 +15,7 @@ annotations tree all live under the home no matter where you run varhub from.
 # config.toml
 data_dir         = "$VARHUB_HOME/data"        # base for relative `localpath` files
 cache_dir        = "$VARHUB_HOME/data/cache"  # downloaded sources + tool images/data
+                                              # (or "s3://bucket/prefix" to provision to S3)
 default_snapshot = "2026-07"
 annotations_dir  = "./annotations"           # root for sources/ and snapshots/
 

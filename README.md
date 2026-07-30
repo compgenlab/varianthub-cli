@@ -52,8 +52,8 @@ varhub source add --name gnomad --version 4.1 --url https://… --format vcf --s
 varhub annotation add --source gnomad:4.1 --name gnomad_af --field AF --type numeric
 varhub download -j 4
 
-# provision into an object store instead of a local cache (annotation still reads
-# locally — see docs/lifecycle.md):
+# provision into an object store, then annotate straight from it — no local copy
+# of the data, only range requests (see docs/lifecycle.md):
 varhub download --to s3://my-bucket/varhub
 
 # annotate (default output is TSV; --format vcf|json|text, -o writes to a file):

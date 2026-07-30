@@ -20,7 +20,6 @@ import (
 	"github.com/compgenlab/varianthub-cli/internal/engine"
 	"github.com/compgenlab/varianthub-cli/internal/fetch"
 	"github.com/compgenlab/varianthub-cli/internal/model"
-	"github.com/compgenlab/varianthub-cli/internal/objstore"
 	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
@@ -75,15 +74,6 @@ func ReferencedTools(snap *config.Snapshot, anns []config.Annotation) []config.S
 // RequireSources errors if any file-based source referenced by anns isn't fully
 // present on disk (tool sources are generated at run time, so skipped).
 func RequireSources(cfg *config.Config, snap *config.Snapshot, anns []config.Annotation) error {
-	// `varhub download` can provision into an object store, but annotation still
-	// reads through the filesystem. Say so here rather than letting it fail deep
-	// in the tabix open with "no index found", which reads as "not downloaded"
-	// and sends the user to re-run a download that already succeeded.
-	if objstore.IsRemote(cfg.CacheDirAbs()) {
-		return fmt.Errorf("cache_dir is %s: `varhub download` can provision into an object store, "+
-			"but annotating directly from one is not supported yet — point cache_dir at a local "+
-			"directory to annotate", cfg.CacheDirAbs())
-	}
 	seen := map[string]bool{}
 	var problems []string
 	for _, a := range anns {

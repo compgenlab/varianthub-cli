@@ -57,10 +57,21 @@ Details worth knowing:
   keys. `AWS_ENDPOINT_URL` points at a non-AWS, S3-compatible target and switches on
   path-style addressing.
 
-Reading annotations directly from an object store is **not supported yet**: `annotate`
-still needs a local `cache_dir`. Provisioning a bucket and annotating from it are separate
-pieces of work, and `annotate` says so plainly rather than failing as if nothing had been
-downloaded.
+### Annotating from an object store
+
+`annotate` reads an `s3://` cache directly, with no local copy of the data. Each source is
+opened where it sits and queried with **range requests**: the tabix index is fetched whole
+(it is small), then only the blocks covering the queried regions are pulled. A narrow query
+against a 2 MB indexed VCF transfers under 5% of it.
+
+This applies to every indexed format — VCF, BED, tab, bigWig, bigBed, and the converted GTF
+gene model. Two consequences worth knowing:
+
+- **A GTF must be indexed.** Locally, a GTF with no index falls back to loading the whole
+  file into memory; remotely that would mean streaming the entire object on every run, so it
+  is an error instead. `varhub download` builds the index.
+- **Credentials are needed at annotate time**, not just at download time, and come from the
+  same standard AWS chain.
 
 ### Build sources
 

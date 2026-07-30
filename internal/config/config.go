@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -74,7 +73,6 @@ type Config struct {
 	Registries      []string             `toml:"registries,omitempty"` // multiple registries (HTTPS registry.toml URLs)
 	Database        Database             `toml:"database"`
 	References      map[string]Reference `toml:"references,omitempty"` // assembly -> reference FASTA
-	Server          ServerConfig         `toml:"server,omitempty"`     // REST annotate server (varhub server)
 
 	dir string `toml:"-"` // directory holding config.toml, for resolving paths
 }
@@ -104,92 +102,6 @@ func (c *Config) RegistryLocations() []string {
 type Database struct {
 	Backend string `toml:"backend"` // "sqlite" (default) or "postgres"
 	Path    string `toml:"path"`    // file path (sqlite) or DSN (postgres)
-}
-
-// ServerConfig configures the `varhub server` REST annotate service (the
-// [server] block). Optional — only consulted when `varhub server` runs. Tokens
-// authenticating the /v1 API are HMAC-signed with MasterKey; a valid one is
-// printed to stdout at startup. Jobs and results persist in DB (its own SQLite
-// database, separate from the annotation cache).
-type ServerConfig struct {
-	Endpoint     string `toml:"endpoint,omitempty"`      // IP:port to listen on (e.g. "127.0.0.1:8080")
-	MasterKey    string `toml:"master_key,omitempty"`    // HMAC signing key for API tokens (required unless require_token=false)
-	RequireToken *bool  `toml:"require_token,omitempty"` // require a bearer token on /v1 (default true; false = open, tokenless public API)
-	Workers      int    `toml:"workers,omitempty"`       // async worker pool size (default 1)
-	DB           string `toml:"db,omitempty"`            // job-queue SQLite path (default "varhub_server.db")
-
-	// Large-job performance.
-	MaxChunkVariants *int `toml:"max_chunk_variants,omitempty"` // variant-count chunk size for a job (default 2000; explicit 0 disables chunking)
-	AnnotateThreads  int  `toml:"annotate_threads,omitempty"`   // per-job chunk parallelism (default 0 = GOMAXPROCS)
-
-	// Interactive convenience: how long a submit (or a results ?wait=) may block
-	// server-side for the job to finish before returning the job id to poll. Lets
-	// fast jobs return results in the first response. Caps any client-requested wait.
-	SubmitWait string `toml:"submit_wait,omitempty"` // Go duration (default "10s"; "0" = never wait, always async)
-
-	// Retention.
-	JobTTL string `toml:"job_ttl,omitempty"` // GC age for terminal jobs + their results, a Go duration (default "24h"; "0" = keep forever)
-
-	// Public-service abuse protection.
-	MaxJobsPerIP     int      `toml:"max_jobs_per_ip,omitempty"`    // per-IP concurrent running-job cap (default 2; <=0 = unlimited)
-	RatePerMin       int      `toml:"rate_per_min,omitempty"`       // per-IP submit throttle, requests/min (default 30; <=0 = unlimited)
-	RateBurst        int      `toml:"rate_burst,omitempty"`         // per-IP throttle burst (default 10)
-	TrustedProxies   []string `toml:"trusted_proxies,omitempty"`    // CIDRs whose X-Forwarded-For is trusted (default loopback + private)
-	AllowToolsUnauth *bool    `toml:"allow_tools_unauth,omitempty"` // whether unauthenticated /ui may trigger type="tool" sources (default false)
-
-	// Browser UI.
-	UIEnabled      *bool `toml:"ui_enabled,omitempty"`       // serve the browser form + /ui/* twins (default true)
-	UIRequireToken bool  `toml:"ui_require_token,omitempty"` // require the bearer token on /ui/* too (default false)
-}
-
-// JobTTLDuration parses JobTTL into a retention duration for terminal jobs and
-// their results. An empty string defaults to 24 hours; "0" (or any zero duration)
-// disables GC. Unparseable values fall back to the 24-hour default.
-func (s ServerConfig) JobTTLDuration() time.Duration {
-	if s.JobTTL == "" {
-		return 24 * time.Hour
-	}
-	d, err := time.ParseDuration(s.JobTTL)
-	if err != nil {
-		return 24 * time.Hour
-	}
-	return d // may be 0 → GC disabled
-}
-
-// ChunkSize is the effective variant-count chunk size: nil ⇒ 2000 (chunking on),
-// an explicit 0 ⇒ chunking disabled, else the configured value.
-func (s ServerConfig) ChunkSize() int {
-	if s.MaxChunkVariants == nil {
-		return 2000
-	}
-	return *s.MaxChunkVariants
-}
-
-// RequireTokenForV1 reports whether the /v1 API is bearer-token authenticated
-// (nil RequireToken ⇒ true, the secure default). false serves /v1 open.
-func (s ServerConfig) RequireTokenForV1() bool { return s.RequireToken == nil || *s.RequireToken }
-
-// SubmitWaitCap is the maximum time a submit/results request may block waiting for
-// a job to finish. Empty ⇒ 10s; "0" ⇒ never wait (always return immediately).
-// Unparseable/negative values fall back to 10s.
-func (s ServerConfig) SubmitWaitCap() time.Duration {
-	if s.SubmitWait == "" {
-		return 10 * time.Second
-	}
-	d, err := time.ParseDuration(s.SubmitWait)
-	if err != nil || d < 0 {
-		return 10 * time.Second
-	}
-	return d // may be 0 → never wait
-}
-
-// UIIsEnabled reports whether the browser UI is served (nil UIEnabled ⇒ true).
-func (s ServerConfig) UIIsEnabled() bool { return s.UIEnabled == nil || *s.UIEnabled }
-
-// ToolsAllowedUnauth reports whether unauthenticated /ui requests may trigger tool
-// sources (nil ⇒ false, the safe default for a public server).
-func (s ServerConfig) ToolsAllowedUnauth() bool {
-	return s.AllowToolsUnauth != nil && *s.AllowToolsUnauth
 }
 
 // Reference pins the reference genome FASTA for one assembly (used by external
@@ -997,28 +909,6 @@ func Load(path string) (*Config, error) {
 	if c.AnnotationsDir == "" {
 		c.AnnotationsDir = "annotations"
 	}
-	// Server defaults (the [server] block is optional; only used by `varhub server`).
-	if c.Server.Workers <= 0 {
-		c.Server.Workers = 1
-	}
-	if c.Server.DB == "" {
-		c.Server.DB = "varhub_server.db"
-	}
-	if c.Server.MaxJobsPerIP == 0 {
-		c.Server.MaxJobsPerIP = 2
-	}
-	if c.Server.RatePerMin == 0 {
-		c.Server.RatePerMin = 30
-	}
-	if c.Server.RateBurst == 0 {
-		c.Server.RateBurst = 10
-	}
-	if len(c.Server.TrustedProxies) == 0 {
-		// Behind Caddy/Traefik on loopback by default; private ranges cover
-		// container/sidecar proxies. Override to lock down which peer's
-		// X-Forwarded-For is trusted.
-		c.Server.TrustedProxies = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
-	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -1445,10 +1335,6 @@ func (c *Config) DatabasePathAbs() string {
 	}
 	return c.resolveDir(c.Database.Path)
 }
-
-// ServerDBPathAbs is the server job-queue database path resolved relative to
-// VARHUB_HOME (the config dir); an absolute path is returned unchanged.
-func (c *Config) ServerDBPathAbs() string { return c.resolveDir(c.Server.DB) }
 
 // CacheDirAbs is the source-file cache directory resolved relative to the config
 // file. Defaults to "<data_dir>/cache" (or "cache") when cache_dir is unset.

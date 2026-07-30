@@ -1,0 +1,35 @@
+# Keep the Docker build context to source only.
+#
+# This matters more than it looks: local scratch under tmp/ can reach tens of
+# gigabytes, and Docker sends the whole context to the daemon before building.
+# varianthub-web's dev compose builds varhub from this directory as a named build
+# context, so anything not ignored here is copied on every build.
+
+# local scratch + caches
+/tmp/
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# build output
+/bin/
+/dist/
+/varhub
+
+# vcs + tooling
+.git/
+.github/
+.claude/
+
+# local config
+config.toml
+
+# go workspace (machine-local)
+go.work
+go.work.sum
+
+# docs and examples are not needed to compile the binary
+/docs/
+/registry-repo-scaffold/
+*.md

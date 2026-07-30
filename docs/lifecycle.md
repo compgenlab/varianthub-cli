@@ -162,3 +162,20 @@ Call them as `varhub bgzip` / `varhub tabix` from your `run` steps (varhub is on
 your recipe runs).
 
 Next: **[Input & output formats](io-formats.md)**.
+
+## GTF conversion and the original download
+
+A GTF that does not ship a tabix index cannot be queried by position, so
+`download` converts it: the file is streamed through a tabix writer in GFF mode
+(comment lines dropped) and written as **BGZF** — gzip in independent blocks, so
+a query can seek to one block instead of decompressing the whole file. The result
+is *larger* than a plain-gzip original, because resetting the compressor every
+block costs ratio. That is the price of random access.
+
+The original is removed once the conversion succeeds, since nothing reads it
+again except a re-index and `--force` re-downloads anyway. Pass `--keep-raw` to
+keep it, at roughly double the space.
+
+Pruning is refused unless the converted file *and* its index are both present, and
+never touches a source that shipped pre-indexed — there the original **is** the
+queried file.

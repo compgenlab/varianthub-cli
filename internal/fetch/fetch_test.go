@@ -61,7 +61,7 @@ func TestSourceReusePublishedIndexAndBuild(t *testing.T) {
 		Name: "clinvar", Version: "1", Format: "vcf",
 		URL:      ts.URL + "/clinvar.vcf.gz",
 		Checksum: sha256Spec(t, filepath.Join(srvDir, "clinvar.vcf.gz")),
-	}, false)
+	}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSourceReusePublishedIndexAndBuild(t *testing.T) {
 		Name: "gnomad", Version: "1", Format: "vcf",
 		URL:      ts.URL + "/gnomad.vcf.gz",
 		Checksum: sha256Spec(t, filepath.Join(srvDir, "gnomad.vcf.gz")),
-	}, false)
+	}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSourceReusePublishedIndexAndBuild(t *testing.T) {
 	r3, err := Source(ctx, cfg, config.Source{
 		Name: "clinvar", Version: "1", Format: "vcf",
 		URL: ts.URL + "/clinvar.vcf.gz",
-	}, false)
+	}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSourceGTFNoIndex(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir()}
 	src := config.Source{Name: "gencode", Version: "38", Format: "gtf", URL: ts.URL + "/genes.gtf"}
 
-	r, err := Source(context.Background(), cfg, src, false)
+	r, err := Source(context.Background(), cfg, src, false, true)
 	if err != nil {
 		t.Fatalf("gtf source download: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestSourceChecksumVerify(t *testing.T) {
 	good, err := Source(ctx, cfg, config.Source{
 		Name: "clinvar", Version: "1", Format: "vcf",
 		URL: ts.URL + "/clinvar.vcf.gz", Checksum: sha256Spec(t, file),
-	}, false)
+	}, false, true)
 	if err != nil {
 		t.Fatalf("correct checksum: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestSourceChecksumVerify(t *testing.T) {
 		Name: "gnomad", Version: "1", Format: "vcf",
 		URL: ts.URL + "/clinvar.vcf.gz", Checksum: "sha256:" + strings.Repeat("0", 64),
 	}
-	if _, err := Source(ctx, cfg, bad, false); err == nil {
+	if _, err := Source(ctx, cfg, bad, false, true); err == nil {
 		t.Fatal("expected a checksum mismatch error")
 	}
 	target := cfg.ResolveSourcePath(bad)
@@ -183,7 +183,7 @@ func TestSourceExplicitIndexURL(t *testing.T) {
 		Checksum:      sha256Spec(t, vcf),
 		URLIndex:      ts.URL + "/custom.tbi",
 		ChecksumIndex: sha256Spec(t, custom),
-	}, false)
+	}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestToolsSetupOnce(t *testing.T) {
 	}}}
 	ctx := context.Background()
 
-	res, err := Snapshot(ctx, cfg, rel, "", false, 1)
+	res, err := Snapshot(ctx, cfg, rel, "", false, true, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,12 +214,12 @@ func TestToolsSetupOnce(t *testing.T) {
 		t.Errorf("first: status=%q, want 'setup: done'", res[0].Index)
 	}
 	// Second run: sentinel present → skipped.
-	res, _ = Snapshot(ctx, cfg, rel, "", false, 1)
+	res, _ = Snapshot(ctx, cfg, rel, "", false, true, 1)
 	if res[0].Index != "setup: skipped" {
 		t.Errorf("second: status=%q, want 'setup: skipped'", res[0].Index)
 	}
 	// --force: re-runs.
-	res, _ = Snapshot(ctx, cfg, rel, "", true, 1)
+	res, _ = Snapshot(ctx, cfg, rel, "", true, true, 1)
 	if res[0].Index != "setup: done" {
 		t.Errorf("force: status=%q, want 'setup: done'", res[0].Index)
 	}
@@ -235,7 +235,7 @@ func TestToolsOnlyFilter(t *testing.T) {
 	}}
 	ctx := context.Background()
 
-	res, err := Snapshot(ctx, cfg, rel, "vep", false, 1)
+	res, err := Snapshot(ctx, cfg, rel, "vep", false, true, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,11 +246,11 @@ func TestToolsOnlyFilter(t *testing.T) {
 		t.Error("cadd setup ran despite --source vep")
 	}
 	// name:version form also matches.
-	if res, err = Snapshot(ctx, cfg, rel, "cadd:1.7", false, 1); err != nil || len(res) != 1 {
+	if res, err = Snapshot(ctx, cfg, rel, "cadd:1.7", false, true, 1); err != nil || len(res) != 1 {
 		t.Fatalf("only=cadd:1.7 → res=%+v err=%v", res, err)
 	}
 	// Unknown name errors.
-	if _, err := Snapshot(ctx, cfg, rel, "nope", false, 1); err == nil {
+	if _, err := Snapshot(ctx, cfg, rel, "nope", false, true, 1); err == nil {
 		t.Error("expected error for unknown source")
 	}
 }
@@ -268,7 +268,7 @@ func TestCacheKeyedDedup(t *testing.T) {
 		Checksum: sha256Spec(t, filepath.Join(srvDir, "clinvar.vcf.gz"))}
 	ctx := context.Background()
 
-	r1, err := Source(ctx, cfg, src, false)
+	r1, err := Source(ctx, cfg, src, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestCacheKeyedDedup(t *testing.T) {
 		t.Errorf("expected cached file at %s", want)
 	}
 	// Second reference (e.g. another snapshot) reuses the cache — no re-download.
-	r2, err := Source(ctx, cfg, src, false)
+	r2, err := Source(ctx, cfg, src, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestSnapshotBuildSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := Snapshot(context.Background(), cfg, snap, "", false, 4)
+	results, err := Snapshot(context.Background(), cfg, snap, "", false, true, 4)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestSourceBigWigNoIndex(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir()}
 	src := config.Source{Name: "revel", Version: "1.3", Format: "bigwig", URL: ts.URL + "/scores.bw"}
 
-	r, err := Source(context.Background(), cfg, src, false)
+	r, err := Source(context.Background(), cfg, src, false, true)
 	if err != nil {
 		t.Fatalf("bigwig source download: %v", err)
 	}
@@ -480,5 +480,149 @@ func TestEnsureIndexedGTF(t *testing.T) {
 	}
 	if status2 != "reused" {
 		t.Errorf("second call status = %q, want reused", status2)
+	}
+}
+
+// TestPruneRawGTF: after conversion the original is removable, and the source
+// keeps working without it. Before the check order was fixed, EnsureIndexedGTF
+// demanded the raw even when a perfectly good derived index was on disk.
+func TestPruneRawGTF(t *testing.T) {
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "genes.gtf")
+	body := "chr1\tt\tgene\t1000\t2000\t.\t+\t.\tgene_id \"A\";\n"
+	if err := os.WriteFile(raw, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{CacheDir: t.TempDir()}
+	src := config.Source{Name: "gencode", Version: "44", Format: "gtf", LocalPath: raw}
+
+	if _, status, err := EnsureIndexedGTF(cfg, src, false); err != nil || status != "built" {
+		t.Fatalf("build: %q %v", status, err)
+	}
+
+	freed, err := PruneRawGTF(cfg, src)
+	if err != nil {
+		t.Fatalf("PruneRawGTF: %v", err)
+	}
+	if freed != int64(len(body)) {
+		t.Errorf("freed = %d, want %d", freed, len(body))
+	}
+	if fileExists(raw) {
+		t.Error("the original is still present")
+	}
+
+	// The point of the reorder: the source still resolves from the derived index.
+	idx, status, err := EnsureIndexedGTF(cfg, src, false)
+	if err != nil {
+		t.Fatalf("after prune: %v", err)
+	}
+	if status != "reused" {
+		t.Errorf("after prune status = %q, want reused", status)
+	}
+	if r, rerr := tabix.NewReader(idx); rerr != nil {
+		t.Errorf("indexed output unreadable after prune: %v", rerr)
+	} else {
+		r.Close()
+	}
+
+	// Pruning twice is a no-op, not an error.
+	if freed, err := PruneRawGTF(cfg, src); err != nil || freed != 0 {
+		t.Errorf("second prune = %d, %v; want 0 and no error", freed, err)
+	}
+}
+
+// A source that shipped pre-indexed IS the queried file. Pruning it would delete
+// the data.
+func TestPruneRawGTFSkipsPreIndexed(t *testing.T) {
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "genes.gtf.gz")
+	for _, f := range []string{raw, raw + ".tbi"} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{CacheDir: t.TempDir()}
+	src := config.Source{Name: "g", Version: "1", Format: "gtf", LocalPath: raw}
+
+	if _, status, _ := EnsureIndexedGTF(cfg, src, false); status != "pre-indexed" {
+		t.Fatalf("status = %q, want pre-indexed", status)
+	}
+	if freed, err := PruneRawGTF(cfg, src); err != nil || freed != 0 {
+		t.Errorf("prune = %d, %v; want a no-op", freed, err)
+	}
+	if !fileExists(raw) {
+		t.Fatal("pruned a pre-indexed source's only copy")
+	}
+}
+
+// Without a usable replacement, pruning must do nothing — otherwise a failed or
+// partial conversion would take the only copy with it.
+func TestPruneRawGTFRequiresReplacement(t *testing.T) {
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "genes.gtf")
+	if err := os.WriteFile(raw, []byte("chr1\tt\tgene\t1\t2\t.\t+\t.\tgene_id \"A\";\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{CacheDir: t.TempDir()}
+	src := config.Source{Name: "g", Version: "1", Format: "gtf", LocalPath: raw}
+
+	// No index built yet.
+	if freed, err := PruneRawGTF(cfg, src); err != nil || freed != 0 {
+		t.Errorf("prune with no index = %d, %v; want a no-op", freed, err)
+	}
+	if !fileExists(raw) {
+		t.Fatal("pruned the only copy")
+	}
+
+	// Derived file present but its .tbi missing: still not usable.
+	idx := cfg.ResolveGTFIndexPath(src)
+	if err := os.MkdirAll(filepath.Dir(idx), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(idx, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if freed, err := PruneRawGTF(cfg, src); err != nil || freed != 0 {
+		t.Errorf("prune with an unindexed replacement = %d, %v; want a no-op", freed, err)
+	}
+	if !fileExists(raw) {
+		t.Fatal("pruned with no usable replacement")
+	}
+}
+
+// A converted GTF is usable from its derived index alone. Missing() checked the
+// raw first, so a pruned source was reported "not downloaded" despite being
+// queryable — annotation refused to run on data that was right there.
+func TestMissingAcceptsPrunedGTF(t *testing.T) {
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "genes.gtf")
+	if err := os.WriteFile(raw, []byte("chr1\tt\tgene\t1000\t2000\t.\t+\t.\tgene_id \"A\";\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{CacheDir: t.TempDir()}
+	src := config.Source{Name: "gencode", Version: "44", Format: "gtf", LocalPath: raw}
+
+	if m := Missing(cfg, src); len(m) == 0 {
+		t.Fatal("an unindexed GTF should be reported missing")
+	}
+	if _, _, err := EnsureIndexedGTF(cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	if m := Missing(cfg, src); len(m) != 0 {
+		t.Fatalf("indexed GTF reported missing: %v", m)
+	}
+	if _, err := PruneRawGTF(cfg, src); err != nil {
+		t.Fatal(err)
+	}
+	if m := Missing(cfg, src); len(m) != 0 {
+		t.Fatalf("pruned GTF reported missing: %v", m)
+	}
+
+	// With both gone it really is missing, and the message names the raw.
+	os.Remove(cfg.ResolveGTFIndexPath(src))
+	os.Remove(cfg.ResolveGTFIndexPath(src) + ".tbi")
+	m := Missing(cfg, src)
+	if len(m) != 1 || !strings.Contains(m[0], "genes.gtf") {
+		t.Errorf("missing = %v, want the raw path", m)
 	}
 }

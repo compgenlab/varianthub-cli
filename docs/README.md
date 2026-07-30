@@ -29,7 +29,6 @@ This directory documents how the system is put together and how to use it.
   annotate array → `cgkit vcf-concat`) for a scheduler.
 - **[Registry](registry.md)** — using a registry to pull pre-made sources/snapshots,
   and submitting a source (data or tool) to the public registry.
-- **[REST API](rest-api.md)** — *placeholder* for the planned annotation endpoint.
 
 ## The 30-second model
 

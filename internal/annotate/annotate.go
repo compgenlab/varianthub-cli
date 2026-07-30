@@ -19,6 +19,7 @@ import (
 
 	"github.com/compgenlab/varianthub-cli/internal/config"
 	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
 	"github.com/compgenlab/varianthub-cli/internal/software"
 	"github.com/compgenlab/varianthub-cli/internal/store"
 	"github.com/compgenlab/varianthub-cli/internal/tool"
@@ -382,6 +383,11 @@ func buildSourceGroup(src config.Source, anns []config.Annotation, files []confi
 // single file. The per-field mapping matches buildSingle; only the shape differs (N
 // fields on one reader instead of one annotator per field).
 func buildGroupedSingle(src config.Source, anns []config.Annotation, path string) (htsann.Annotator, error) {
+	// See buildSingle: nil for a local path, an open reader for a remote one.
+	tr, err := objstore.OpenTabixLocator(context.Background(), path)
+	if err != nil {
+		return nil, fmt.Errorf("source %q: %w", src.ID(), err)
+	}
 	switch src.Format {
 	case "vcf", "":
 		fields := make([]htsann.VcfFieldOptions, 0, len(anns))
@@ -398,7 +404,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 			})
 		}
 		return htsann.NewVcfAnnotationGroup(htsann.VcfGroupOptions{
-			Filename: path, AutoConvert: true, Fields: fields,
+			Filename: path, Reader: tr, AutoConvert: true, Fields: fields,
 		})
 	case "bed":
 		fields := make([]htsann.TabixFieldOptions, 0, len(anns))
@@ -409,7 +415,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 			})
 		}
 		return htsann.NewTabixAnnotationGroup(htsann.TabixGroupOptions{
-			Filename: path, AutoConvert: true, Fields: fields,
+			Filename: path, Reader: tr, AutoConvert: true, Fields: fields,
 		})
 	case "tab":
 		fields := make([]htsann.TabixFieldOptions, 0, len(anns))
@@ -420,7 +426,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 			})
 		}
 		return htsann.NewTabixAnnotationGroup(htsann.TabixGroupOptions{
-			Filename: path, AutoConvert: true,
+			Filename: path, Reader: tr, AutoConvert: true,
 			AltCol: src.AltCol, RefCol: src.RefCol, Fields: fields,
 		})
 	default:
@@ -501,6 +507,13 @@ func (d *altDispatch) Close() error {
 // source file's own ref names, so input/source chrom naming (Ensembl "1" / UCSC
 // "chr1" / NCBI "NC_000001.11") is matched automatically.
 func buildSingle(src config.Source, a config.Annotation, path string) (htsann.Annotator, error) {
+	// A remote cache locator is opened here and handed to the annotator, which
+	// then treats it exactly like a file it opened itself (and closes it). For a
+	// local path these stay nil and the annotator opens the file, unchanged.
+	tr, err := objstore.OpenTabixLocator(context.Background(), path)
+	if err != nil {
+		return nil, fmt.Errorf("source %q: %w", src.ID(), err)
+	}
 	switch src.Format {
 	case "vcf", "":
 		field := a.FieldName() // INFO id, or "@ID" to copy the source ID
@@ -511,17 +524,18 @@ func buildSingle(src config.Source, a config.Annotation, path string) (htsann.An
 			Name:        a.Name,
 			Field:       field,
 			Filename:    path,
+			Reader:      tr,
 			Exact:       a.Match != "position", // default exact; "position" = position-only
 			Unique:      a.Unique,
 			AutoConvert: true,
 		})
 	case "bed":
-		opts := htsann.TabixOptions{Name: a.Name, Filename: path, IsNumber: a.IsNumeric(), AutoConvert: true}
+		opts := htsann.TabixOptions{Name: a.Name, Filename: path, Reader: tr, IsNumber: a.IsNumeric(), AutoConvert: true}
 		setBedColumn(&opts, a.FieldName())
 		return htsann.NewTabixAnnotator(opts)
 	case "tab":
 		opts := htsann.TabixOptions{
-			Name: a.Name, Filename: path, IsNumber: a.IsNumeric(),
+			Name: a.Name, Filename: path, Reader: tr, IsNumber: a.IsNumeric(),
 			AltCol: src.AltCol, RefCol: src.RefCol, AutoConvert: true,
 		}
 		setTabColumn(&opts, a.FieldName())
@@ -529,16 +543,24 @@ func buildSingle(src config.Source, a config.Annotation, path string) (htsann.An
 	case "bigwig":
 		// One numeric value per base (no ref/alt); allele specificity, when needed,
 		// comes from a per-alt {alt} file set routed by altDispatch.
+		br, err := objstore.OpenBBILocator(context.Background(), path)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: %w", src.ID(), err)
+		}
 		return htsann.NewBigWigAnnotator(htsann.BigWigOptions{
-			Name: a.Name, Filename: path, AutoConvert: true,
+			Name: a.Name, Filename: path, Reader: br, AutoConvert: true,
 		})
 	case "bigbed":
 		col, err := bigBedColumn(a.FieldName())
 		if err != nil {
 			return nil, fmt.Errorf("source %q: %w", src.ID(), err)
 		}
+		br, err := objstore.OpenBBILocator(context.Background(), path)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: %w", src.ID(), err)
+		}
 		return htsann.NewBigBedAnnotator(htsann.BigBedOptions{
-			Name: a.Name, Filename: path, Col: col, IsNumber: a.IsNumeric(), AutoConvert: true,
+			Name: a.Name, Filename: path, Reader: br, Col: col, IsNumber: a.IsNumeric(), AutoConvert: true,
 		})
 	default:
 		return nil, fmt.Errorf("source %q: unsupported format %q", src.ID(), src.Format)

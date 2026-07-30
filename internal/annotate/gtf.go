@@ -1,6 +1,7 @@
 package annotate
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/compgenlab/varianthub-cli/internal/config"
 	"github.com/compgenlab/varianthub-cli/internal/fetch"
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
 )
 
 // geneModel is the query surface an annotator needs from a GTF gene model, served
@@ -52,7 +54,7 @@ type gtfAnnotator struct {
 func openGeneModel(cfg *config.Config, src config.Source) (model geneModel, conv *vcf.ContigConverter, closer io.Closer, filename string, err error) {
 	tags := src.GTFTags
 	if indexed, _, ierr := fetch.EnsureIndexedGTF(cfg, src, false); ierr == nil {
-		if isrc, ierr := gtf.NewIndexedAnnotationSource(indexed, tags); ierr == nil {
+		if isrc, ierr := openIndexedGTF(indexed, tags); ierr == nil {
 			return isrc, vcf.NewContigConverter(isrc.RefNames()), isrc, indexed, nil
 		} else {
 			warnUnindexedGTF(src, ierr)
@@ -62,6 +64,14 @@ func openGeneModel(cfg *config.Config, src config.Source) (model geneModel, conv
 	}
 	// Fallback: the whole-file in-memory model.
 	raw := cfg.ResolveSourcePath(src)
+	if objstore.IsRemote(raw) {
+		// Reading a whole GTF into memory means streaming the entire object, so
+		// the fallback that quietly costs RAM locally would quietly cost egress
+		// and minutes here. An indexed copy is required rather than optional.
+		return nil, nil, nil, "", fmt.Errorf(
+			"GTF source %s has no usable index in the object store; "+
+				"run `varhub download` to build one (the whole-file fallback is not used for remote sources)", raw)
+	}
 	msrc, err := gtf.NewAnnotationSource(raw, tags)
 	if err != nil {
 		return nil, nil, nil, "", err
@@ -195,4 +205,16 @@ func buildGTF(cfg *config.Config, src config.Source, annos []config.Annotation, 
 		fields[i] = gtfField{name: a.Name, key: strings.ToUpper(a.FieldName())}
 	}
 	return newGTFAnnotator(cfg, src, fields)
+}
+
+// openIndexedGTF opens the indexed gene model at a locator, local or remote.
+func openIndexedGTF(locator string, tags []string) (*gtf.IndexedAnnotationSource, error) {
+	tr, err := objstore.OpenTabixLocator(context.Background(), locator)
+	if err != nil {
+		return nil, err
+	}
+	if tr == nil {
+		return gtf.NewIndexedAnnotationSource(locator, tags)
+	}
+	return gtf.NewIndexedAnnotationSourceFrom(tr, tags), nil
 }

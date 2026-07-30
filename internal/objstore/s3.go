@@ -59,7 +59,17 @@ type S3 struct {
 // AWS_ENDPOINT_URL (or AWS_ENDPOINT_URL_S3) points at a non-AWS, S3-compatible
 // target. Setting it also forces path-style addressing: virtual-host style
 // requires wildcard DNS for the bucket, which a local gateway does not have.
-func NewS3(ctx context.Context) (*S3, error) {
+// Option configures the client.
+type Option func(*s3.Options)
+
+// WithHTTPClient overrides the HTTP client. Used by tests that need to observe
+// what actually went over the wire — specifically, that indexed reads issue
+// ranged GETs rather than pulling whole objects.
+func WithHTTPClient(c aws.HTTPClient) Option {
+	return func(o *s3.Options) { o.HTTPClient = c }
+}
+
+func NewS3(ctx context.Context, opts ...Option) (*S3, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("aws config: %w", err)
@@ -75,6 +85,9 @@ func NewS3(ctx context.Context) (*S3, error) {
 		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
 			o.UsePathStyle = true
+		}
+		for _, opt := range opts {
+			opt(o)
 		}
 	})
 

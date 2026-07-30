@@ -759,6 +759,9 @@ func presetFor(format string) (*tabix.WriterOpts, error) {
 // status is "pre-indexed" | "reused" | "built". force rebuilds the cached index.
 func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, status string, err error) {
 	raw := cfg.ResolveSourcePath(src)
+	if objstore.IsRemote(raw) {
+		return ensureIndexedGTFRemote(context.Background(), cfg, src, raw)
+	}
 	// A .gz raw with a sidecar tabix index is already usable directly.
 	if strings.HasSuffix(raw, ".gz") && fileExists(raw) &&
 		(fileExists(raw+".tbi") || fileExists(raw+".csi")) {
@@ -1261,4 +1264,38 @@ func missingRemote(ctx context.Context, cfg *config.Config, src config.Source) [
 		}
 	}
 	return missing
+}
+
+// ensureIndexedGTFRemote resolves the queryable GTF locator in an object store.
+//
+// Unlike the local case this never builds anything: converting a GTF means
+// streaming it through bgzip and tabix, which needs a local staging copy, so it
+// belongs to `varhub download` (see fetchGTFRemote) and not to a lazy path taken
+// during annotation. Here we only report which locator is usable.
+func ensureIndexedGTFRemote(ctx context.Context, cfg *config.Config, src config.Source, raw string) (string, string, error) {
+	// A .gz original that ships its own index is queried directly, matching the
+	// local rule.
+	if strings.HasSuffix(raw, ".gz") {
+		if ok, err := locatorExists(ctx, raw); err == nil && ok {
+			if _, hasIdx, err := anyIndexAt(ctx, raw); err == nil && hasIdx {
+				return raw, "pre-indexed", nil
+			}
+		}
+	}
+	idx := cfg.ResolveGTFIndexPath(src)
+	if idx == raw {
+		return "", "", fmt.Errorf("GTF index path %s collides with the source file", idx)
+	}
+	ok, err := locatorExists(ctx, idx)
+	if err != nil {
+		return "", "", err
+	}
+	if ok {
+		if _, hasIdx, err := anyIndexAt(ctx, idx); err != nil {
+			return "", "", err
+		} else if hasIdx {
+			return idx, "reused", nil
+		}
+	}
+	return "", "", fmt.Errorf("no indexed GTF at %s (run `varhub download`)", idx)
 }

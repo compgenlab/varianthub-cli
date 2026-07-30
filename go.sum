@@ -44,8 +44,8 @@ github.com/clipperhouse/stringish v0.1.1 h1:+NSqMOr3GR6k1FdRhhnXrLfztGzuG+VuFDfa
 github.com/clipperhouse/stringish v0.1.1/go.mod h1:v/WhFtE1q0ovMta2+m+UbpZ+2/HEXNWYXQgCt4hdOzA=
 github.com/clipperhouse/uax29/v2 v2.5.0 h1:x7T0T4eTHDONxFJsL94uKNKPHrclyFI0lm7+w94cO8U=
 github.com/clipperhouse/uax29/v2 v2.5.0/go.mod h1:Wn1g7MK6OoeDT0vL+Q0SQLDz/KpfsVRgg6W7ihQeh4g=
-github.com/compgenlab/cghts v0.6.3 h1:unFa/y28JqoCsczBqt0uuomAigOSq4yeVNkJZwd92mQ=
-github.com/compgenlab/cghts v0.6.3/go.mod h1:P1KF+4Hfam8FMvyVLg+cG7Mlu5qxTWy9hcoP/idQyXQ=
+github.com/compgenlab/cghts v0.7.1 h1:KfztoQvbO/O5GECMeVh5lK0K6WaCGXrCVTh3ojw3DP4=
+github.com/compgenlab/cghts v0.7.1/go.mod h1:QSvZGsrDtuGUDqHQRDE3s34v/VYNSwKmy9IJn5w1ouA=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

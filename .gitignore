@@ -20,3 +20,9 @@ config.toml
 # go workspace (machine-local)
 go.work
 go.work.sum
+
+# Test pollution guards. Both of these were committed once: a source's location
+# overlay written beside a fixture manifest, and a URL mistaken for a path.
+*.locations.toml
+/http:/
+/https:/

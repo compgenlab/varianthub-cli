@@ -1,7 +1,0 @@
-# Where this source's data was provisioned, written by `varhub download`.
-#
-# The manifest beside this file says what the source is and stays portable;
-# this says where this machine put it. Delete it to fall back to resolving
-# under cache_dir.
-
-root = "s3://bucket/prefix"

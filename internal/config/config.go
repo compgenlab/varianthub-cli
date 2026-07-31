@@ -524,7 +524,19 @@ type SourceFile struct {
 // records the result, rather than writing back to wherever the file used to be.
 func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
 	if s.locations.Empty() {
-		return c.ResolveSourceTargets(s)
+		out := c.ResolveSourceTargets(s)
+		if s.Stream {
+			// Read in place: the url is the location, and there is no cached
+			// copy to point at. Applied here and not in ResolveSourcePath
+			// because that serves provisioning too — resolving a *target* to
+			// the url makes `download --no-stream` write to a directory named
+			// after it.
+			for i := range out {
+				out[i].Path = out[i].URL
+				out[i].IndexPath = out[i].URLIndex
+			}
+		}
+		return out
 	}
 	// A recorded root replaces cache_dir, and the usual layout applies under it,
 	// so a multi-file source needs no per-file bookkeeping.
@@ -1400,6 +1412,16 @@ func (snap *Snapshot) DataSources() []model.DataSource {
 	return out
 }
 
+// SetBaseDir sets the directory relative paths resolve against — what Load()
+// infers from the config file's own location.
+//
+// Exported because a Config built in code, rather than loaded from disk, has an
+// empty base and silently resolves every relative path against the process
+// working directory. That is not a hypothetical: a test built one, and the
+// download it ran wrote a source's files and its location overlay into the
+// package directory, where they were committed.
+func (c *Config) SetBaseDir(dir string) { c.dir = dir }
+
 // resolveDir resolves a configured directory relative to the config file (unless
 // it is absolute).
 func (c *Config) resolveDir(d string) string {
@@ -1451,11 +1473,7 @@ func (c *Config) ResolveSourcePath(s Source) string {
 	if s.LocalPath != "" {
 		return c.resolveLocal(s.LocalPath)
 	}
-	if s.Stream {
-		// Read in place: the URL is the location. Nothing is cached, so there
-		// is no cache path to compose.
-		return s.URL
-	}
+
 	if s.Build != nil {
 		return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.BuildOutput())
 	}

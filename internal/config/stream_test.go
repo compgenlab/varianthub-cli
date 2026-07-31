@@ -13,8 +13,12 @@ func TestStreamResolvesToURL(t *testing.T) {
 		Name: "gnomad", Version: "4.1", Format: "vcf", Stream: true,
 		URL: "https://storage.googleapis.com/gnomad/gnomad.v4.1.sites.chr1.vcf.bgz",
 	}
-	if got := c.ResolveSourcePath(src); got != src.URL {
-		t.Errorf("ResolveSourcePath = %q, want the url", got)
+	// ResolveSourcePath answers the *provisioning* question — where would a
+	// copy go — so it stays a cache path even for a streamed source. Resolving
+	// it to the url made `download --no-stream` write to a directory named
+	// after the url instead of into the cache.
+	if got := c.ResolveSourcePath(src); !strings.Contains(got, "data/cache") {
+		t.Errorf("ResolveSourcePath = %q, want a cache target", got)
 	}
 	files := c.ResolveSourceFiles(src)
 	if len(files) != 1 || files[0].Path != src.URL {
@@ -107,5 +111,25 @@ func TestOverlayOverridesReadPath(t *testing.T) {
 	// Provisioning targets are unaffected by the overlay.
 	if strings.HasPrefix(c.ResolveSourceTargets(src)[0].Path, "s3://") {
 		t.Error("the overlay leaked into the provisioning target")
+	}
+}
+
+// The bug this pins: with `--no-stream` the download target must be the cache,
+// not a directory named after the url.
+func TestStreamProvisioningTargetIsTheCache(t *testing.T) {
+	dir := t.TempDir()
+	c := &Config{DataDir: "data", CacheDir: "data/cache"}
+	c.SetBaseDir(dir)
+	src := Source{
+		Name: "s", Version: "1", Format: "vcf", Stream: true,
+		URL: "http://example.org/s.vcf.gz",
+	}
+	for _, f := range c.ResolveSourceTargets(src) {
+		if strings.Contains(f.Path, "://") || strings.HasPrefix(f.Path, "http") {
+			t.Errorf("provisioning target is a url, not a path: %q", f.Path)
+		}
+		if !strings.HasPrefix(f.Path, dir) {
+			t.Errorf("target %q is outside the config base %q", f.Path, dir)
+		}
 	}
 }

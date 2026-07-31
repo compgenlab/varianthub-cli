@@ -4,4 +4,4 @@
 # this says where this machine put it. Delete it to fall back to resolving
 # under cache_dir.
 
-root = "/tmp/TestSourceReusePublishedIndexAndBuild1654585817/002/cache"
+root = "/tmp/TestSourceReusePublishedIndexAndBuild3918537185/002/cache"

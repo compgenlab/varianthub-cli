@@ -578,6 +578,7 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	keepRaw := fs.Bool("keep-raw", false, "keep a GTF's unprocessed download after it is bgzipped and indexed (uses ~2x the space)")
 	to := fs.String("to", "", "provision into this cache location instead of cache_dir (a directory, or s3://bucket/prefix)")
 	format := fs.String("format", "text", "output format: text | json (json reports the files each source now occupies)")
+	noStream := fs.Bool("no-stream", false, "download sources marked `stream` instead of reading them from their url")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -585,6 +586,7 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 		fetch.SetLogWriter(io.Discard)
 	}
 	fetch.SetKeepTemp(*keepTemp)
+	fetch.SetIgnoreStream(*noStream)
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		return err

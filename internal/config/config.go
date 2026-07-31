@@ -558,6 +558,11 @@ func (c *Config) resolveTargetsIn(s Source, root string) []SourceFile {
 		c2 := *c
 		c2.CacheDir = root
 		c = &c2
+		// A recorded location means the data was provisioned somewhere, so read
+		// that copy even if the manifest prefers streaming. `stream` is the
+		// publisher's suggestion; downloading it is the operator's decision, and
+		// having downloaded it should not leave reads going to the origin.
+		s.Stream = false
 	}
 	return c.resolveTargets(s)
 }
@@ -1215,14 +1220,24 @@ func (snap *Snapshot) validate() error {
 			return fmt.Errorf("duplicate source %q", s.ID())
 		}
 		if s.Stream {
-			if s.URL == "" {
-				return fmt.Errorf("source %q: `stream` reads from `url`, so one is required", s.ID())
-			}
 			if s.LocalPath != "" {
 				return fmt.Errorf("source %q: `stream` and `localpath` contradict — one reads from the url, the other from disk", s.ID())
 			}
 			if s.Build != nil {
 				return fmt.Errorf("source %q: `stream` cannot combine with `build`, which produces a local file", s.ID())
+			}
+			// Every file has to name where to read it from. A source may state
+			// one url at the top — templated by {chrom} or {alt} — or give each
+			// file its own in [[sources.files]]; CADD does the latter, with a
+			// SNV table and an indel table that share nothing but their columns.
+			if len(s.Files) > 0 {
+				for i, f := range s.Files {
+					if f.URL == "" && f.LocalPath == "" {
+						return fmt.Errorf("source %q: `stream` needs a `url` on every [[sources.files]] entry (entry %d has none)", s.ID(), i+1)
+					}
+				}
+			} else if s.URL == "" {
+				return fmt.Errorf("source %q: `stream` reads from `url`, so the source needs one (or a url on each [[sources.files]] entry)", s.ID())
 			}
 		}
 		seen[s.ID()] = true

@@ -288,16 +288,9 @@ func AnnotatorFor(src config.Source, a config.Annotation, files []config.SourceF
 	if len(files) == 1 {
 		return buildSingle(src, a, files[0].Path)
 	}
-	m := &multiFile{anns: make([]htsann.Annotator, 0, len(files))}
-	for _, f := range files {
-		ann, err := buildSingle(src, a, f.Path)
-		if err != nil {
-			m.Close()
-			return nil, err
-		}
-		m.anns = append(m.anns, ann)
-	}
-	return m, nil
+	return newMultiFile(files, func(f config.SourceFile) (htsann.Annotator, error) {
+		return buildSingle(src, a, f.Path)
+	}), nil
 }
 
 // SourceAnnotators builds the hts annotators for one source over the given
@@ -367,16 +360,9 @@ func buildSourceGroup(src config.Source, anns []config.Annotation, files []confi
 	if len(files) == 1 {
 		return buildGroupedSingle(src, anns, files[0].Path)
 	}
-	m := &multiFile{anns: make([]htsann.Annotator, 0, len(files))}
-	for _, f := range files {
-		ann, err := buildGroupedSingle(src, anns, f.Path)
-		if err != nil {
-			m.Close()
-			return nil, err
-		}
-		m.anns = append(m.anns, ann)
-	}
-	return m, nil
+	return newMultiFile(files, func(f config.SourceFile) (htsann.Annotator, error) {
+		return buildGroupedSingle(src, anns, f.Path)
+	}), nil
 }
 
 // buildGroupedSingle maps a source's annotations onto one hts grouped annotator for a
@@ -437,18 +423,115 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 // multiFile runs every file's annotator for a multi-file source. The shared INFO
 // header is declared once (via the first); overlapping files are not deduplicated
 // (a later file's match overwrites an earlier one).
-type multiFile struct{ anns []htsann.Annotator }
+// multiFile spreads one source across several files.
+//
+// Files are opened on demand, and a per-chromosome set routes each record to
+// the one file that can answer it. Both matter most when the data is remote:
+// opening a file means fetching its index, so a 24-chromosome source read over
+// the network used to pull two dozen indexes before answering anything, and
+// then ask all 24 for every record. A locus query now touches exactly the
+// chromosomes it mentions.
+type multiFile struct {
+	files []config.SourceFile
+	build func(config.SourceFile) (htsann.Annotator, error)
+
+	byChrom map[string]htsann.Annotator // opened, keyed by the file's chrom
+	all     []htsann.Annotator          // every annotator opened, for Close
+	byIndex map[int]htsann.Annotator    // opened, for the un-keyed case
+}
+
+func newMultiFile(files []config.SourceFile, build func(config.SourceFile) (htsann.Annotator, error)) *multiFile {
+	return &multiFile{
+		files: files, build: build,
+		byChrom: map[string]htsann.Annotator{},
+		byIndex: map[int]htsann.Annotator{},
+	}
+}
+
+// keyed reports whether every file names the chromosome it holds, which is what
+// makes routing possible. An explicit `files` list without chroms could hold
+// anything, so those are all consulted.
+func (m *multiFile) keyed() bool {
+	for _, f := range m.files {
+		if f.Chrom == "" {
+			return false
+		}
+	}
+	return len(m.files) > 0
+}
+
+func (m *multiFile) openAt(i int) (htsann.Annotator, error) {
+	if a, ok := m.byIndex[i]; ok {
+		return a, nil
+	}
+	a, err := m.build(m.files[i])
+	if err != nil {
+		return nil, err
+	}
+	m.byIndex[i] = a
+	m.all = append(m.all, a)
+	return a, nil
+}
+
+// forChrom returns the annotator holding a chromosome, opening it on first use.
+// A record on a chromosome the source does not cover gets no annotator and no
+// error — that is a miss, not a failure.
+func (m *multiFile) forChrom(chrom string) (htsann.Annotator, error) {
+	if a, ok := m.byChrom[chrom]; ok {
+		return a, nil
+	}
+	for i, f := range m.files {
+		if !sameContig(f.Chrom, chrom) {
+			continue
+		}
+		a, err := m.openAt(i)
+		if err != nil {
+			return nil, err
+		}
+		m.byChrom[chrom] = a
+		return a, nil
+	}
+	m.byChrom[chrom] = nil // remember the miss, so it is looked up once
+	return nil, nil
+}
+
+// sameContig matches contig names across the "chr" prefix, so a record on "17"
+// finds the file named "chr17". The annotators do this for their own matching;
+// routing has to agree or a correctly-named file would be skipped.
+func sameContig(a, b string) bool {
+	return strings.TrimPrefix(a, "chr") == strings.TrimPrefix(b, "chr")
+}
 
 func (m *multiFile) SetupHeader(h *vcf.VcfHeader) error {
-	if len(m.anns) == 0 {
+	if len(m.files) == 0 {
 		return nil
 	}
-	return m.anns[0].SetupHeader(h)
+	// One file is enough: every file of a source declares the same fields, and
+	// they differ only in which records they hold.
+	a, err := m.openAt(0)
+	if err != nil {
+		return err
+	}
+	return a.SetupHeader(h)
 }
 
 func (m *multiFile) Annotate(rec *vcf.VcfRecord) error {
-	for _, ann := range m.anns {
-		if err := ann.Annotate(rec); err != nil {
+	if m.keyed() {
+		a, err := m.forChrom(rec.Chrom)
+		if err != nil {
+			return err
+		}
+		if a == nil {
+			return nil // no file covers this chromosome
+		}
+		return a.Annotate(rec)
+	}
+	for i := range m.files {
+		a, err := m.openAt(i)
+		if err != nil {
+			return err
+		}
+		if err := a.Annotate(rec); err != nil {
 			return err
 		}
 	}
@@ -457,7 +540,7 @@ func (m *multiFile) Annotate(rec *vcf.VcfRecord) error {
 
 func (m *multiFile) Close() error {
 	var err error
-	for _, ann := range m.anns {
+	for _, ann := range m.all {
 		if e := ann.Close(); e != nil && err == nil {
 			err = e
 		}

@@ -148,3 +148,6 @@ func (l *Locations) Delete() error {
 	}
 	return nil
 }
+
+// HasLocations reports whether a recorded location exists for this source.
+func (s Source) HasLocations() bool { return !s.locations.Empty() }

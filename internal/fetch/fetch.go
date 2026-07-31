@@ -92,6 +92,19 @@ var keepTemp bool
 // SetKeepTemp controls whether fetch keeps its scratch directories (default false).
 func SetKeepTemp(keep bool) { keepTemp = keep }
 
+// ignoreStream provisions sources that declare `stream = true` anyway.
+//
+// The flag in a manifest is the publisher saying "you do not need a copy of
+// this" — reasonable for a 24 GB file queried at a handful of loci. It is not a
+// policy: an operator running whole genomes, or one who wants results pinned to
+// bytes that cannot change underneath them, wants the copy. Toggled by
+// `download --no-stream`.
+var ignoreStream bool
+
+// SetIgnoreStream controls whether `stream = true` sources are downloaded
+// anyway (default false).
+func SetIgnoreStream(ignore bool) { ignoreStream = ignore }
+
 // cleanupTemp removes a scratch dir unless keepTemp is set, in which case it logs
 // the retained path.
 func cleanupTemp(dir, label string) {
@@ -135,7 +148,7 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		if s.IsBuiltinSource() {
 			continue
 		}
-		if s.Stream {
+		if s.Stream && !ignoreStream {
 			// Read in place; there is nothing to fetch. Reported so the run
 			// still accounts for every source in the snapshot.
 			streamed = append(streamed, s)
@@ -478,7 +491,7 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 	if src.IsBuiltinSource() {
 		return Result{Source: src.ID(), Data: "-", Index: "-"}, nil
 	}
-	if src.Stream {
+	if src.Stream && !ignoreStream {
 		return Result{Source: src.ID(), Data: "streamed", Index: "remote"}, nil
 	}
 	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
@@ -655,11 +668,12 @@ func Missing(cfg *config.Config, src config.Source) []string {
 	if src.IsBuiltinSource() {
 		return nil
 	}
-	if src.Stream {
+	if src.Stream && !src.HasLocations() {
 		// Nothing is expected on disk. Whether the origin is reachable is a
 		// question for the annotate open, which reports it precisely; probing
 		// every streamed source here would add a network round trip to every
-		// run just to produce a worse error.
+		// run just to produce a worse error. A recorded location means a copy
+		// was downloaded anyway, and that copy is checked like any other.
 		return nil
 	}
 	if src.IsGeneList() {
@@ -1341,7 +1355,7 @@ func ensureIndexedGTFRemote(ctx context.Context, cfg *config.Config, src config.
 // Written per source, beside its manifest: two concurrent `download --source`
 // runs cannot collide, and deleting a source removes its record with it.
 func recordLocations(ctx context.Context, cfg *config.Config, src config.Source) error {
-	if src.IsBuiltinSource() || src.IsGeneList() || src.Stream {
+	if src.IsBuiltinSource() || src.IsGeneList() {
 		return nil // nothing is provisioned, so there is nothing to record
 	}
 	// Record the root, not each file: the layout under it is the convention

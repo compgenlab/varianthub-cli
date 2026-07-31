@@ -36,6 +36,12 @@ type Result struct {
 	Data   string // "downloaded" | "skipped" | "local" | "N downloaded, M skipped"
 	Index  string // "reused" | "downloaded" | "built" | "present" | "linked" | aggregate, or "-"
 	Freed  int64  // bytes reclaimed by pruning a converted GTF's original
+
+	// Files is what the source now occupies in the cache, filled in by the
+	// JSON output path. Consumers that need to record what a download produced
+	// -- a server tracking provisioned sources, say -- would otherwise have to
+	// scan the cache, which is not possible when it is a bucket.
+	Files []FileInfo `json:"files,omitempty"`
 }
 
 // pruneRaw removes a converted GTF's original, logging rather than failing the

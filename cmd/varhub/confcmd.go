@@ -577,6 +577,7 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	keepTemp := fs.Bool("keep-temp", false, "keep per-source scratch dirs (build/tool setup) for debugging")
 	keepRaw := fs.Bool("keep-raw", false, "keep a GTF's unprocessed download after it is bgzipped and indexed (uses ~2x the space)")
 	to := fs.String("to", "", "provision into this cache location instead of cache_dir (a directory, or s3://bucket/prefix)")
+	format := fs.String("format", "text", "output format: text | json (json reports the files each source now occupies)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -616,6 +617,10 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 	if err != nil {
 		return err
 	}
+	if strings.EqualFold(*format, "json") {
+		return emitDownloadJSON(ctx, cfg, snap, results)
+	}
+
 	var freed int64
 	for _, r := range results {
 		fmt.Println(r.Describe())
@@ -627,6 +632,38 @@ func cmdDownload(ctx context.Context, cfgPath, snapshot string, args []string) e
 			fetch.HumanBytes(freed))
 	}
 	return nil
+}
+
+// emitDownloadJSON reports the run in machine-readable form, including what each
+// source now occupies in the cache.
+//
+// The inventory is taken here rather than during the fetch because it is a
+// question about the cache's final state, and because a source that was skipped
+// as already-present has files worth reporting too — a consumer recording what
+// is provisioned needs those as much as the freshly downloaded ones.
+func emitDownloadJSON(ctx context.Context, cfg *config.Config, snap *config.Snapshot, results []fetch.Result) error {
+	byID := map[string]config.Source{}
+	for _, s := range snap.Sources {
+		byID[s.ID()] = s
+	}
+	out := make([]fetch.Result, 0, len(results))
+	for _, r := range results {
+		if src, ok := byID[r.Source]; ok {
+			files, err := fetch.Inventory(ctx, cfg, src)
+			if err != nil {
+				return fmt.Errorf("%s: inventory: %w", r.Source, err)
+			}
+			r.Files = files
+		}
+		out = append(out, r)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]any{
+		"snapshot": snap.Name,
+		"cache":    cfg.CacheDirAbs(),
+		"results":  out,
+	})
 }
 
 func loadConfig(cfgPath string) (*config.Config, error) {

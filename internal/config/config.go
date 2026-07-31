@@ -276,6 +276,16 @@ type Source struct {
 	// Annotations declared on this source (nested; their Source is this source's
 	// Name, or the builtin name for a type="builtin" source).
 	Annotations []Annotation `toml:"annotations,omitempty"`
+
+	// Stream reads the source from its URL instead of caching a copy. For
+	// something like gnomAD — tens of gigabytes, queried at a handful of loci —
+	// downloading it to read 0.01% of it is the wrong trade. The index is
+	// fetched whole and the data by range request.
+	Stream bool `toml:"stream,omitempty"`
+
+	// locations is the overlay recording where this source's data was actually
+	// provisioned. Attached at load time; not part of the manifest.
+	locations *Locations
 }
 
 // DisplayTitle is the source's human-readable name (Title), falling back to its
@@ -505,7 +515,37 @@ type SourceFile struct {
 // ResolveSourceFiles returns the concrete file(s) for a source: one per entry of an
 // explicit Files list, or one per chromosome for a {chrom} template, else a single
 // file.
+// ResolveSourceFiles resolves a source's files for *reading*, applying the
+// location overlay when one is recorded.
+//
+// Provisioning wants the other question — where should this go? — and asks
+// [Config.ResolveSourceTargets]. Keeping them apart is what lets `download
+// --to` move a source: it writes by convention to the current cache_dir and
+// records the result, rather than writing back to wherever the file used to be.
 func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
+	out := c.ResolveSourceTargets(s)
+	if s.locations.Empty() {
+		return out
+	}
+	for i := range out {
+		fl, ok := s.locations.File(out[i].Chrom, out[i].Alt)
+		if !ok {
+			continue
+		}
+		// Path only. Local stays as the manifest declared it: it means "never
+		// download", which an overlay entry does not, and conflating the two
+		// would make download skip sources it should refresh.
+		out[i].Path = fl.Path
+		if fl.Index != "" {
+			out[i].IndexPath = fl.Index
+		}
+	}
+	return out
+}
+
+// ResolveSourceTargets resolves a source's files by the cache_dir convention,
+// ignoring any overlay — where provisioning should put them.
+func (c *Config) ResolveSourceTargets(s Source) []SourceFile {
 	if s.IsGeneList() {
 		return nil // a genelist has no data file of its own; it reads the referenced GTF
 	}
@@ -1157,6 +1197,17 @@ func (snap *Snapshot) validate() error {
 		if seen[s.ID()] {
 			return fmt.Errorf("duplicate source %q", s.ID())
 		}
+		if s.Stream {
+			if s.URL == "" {
+				return fmt.Errorf("source %q: `stream` reads from `url`, so one is required", s.ID())
+			}
+			if s.LocalPath != "" {
+				return fmt.Errorf("source %q: `stream` and `localpath` contradict — one reads from the url, the other from disk", s.ID())
+			}
+			if s.Build != nil {
+				return fmt.Errorf("source %q: `stream` cannot combine with `build`, which produces a local file", s.ID())
+			}
+		}
 		seen[s.ID()] = true
 		if s.IsTool() {
 			if err := validateToolSource(s); err != nil {
@@ -1346,7 +1397,7 @@ func (c *Config) DatabasePathAbs() string {
 // would eat the scheme's second slash.
 func (c *Config) CacheDirAbs() string {
 	cd := c.CacheDir
-	if objstore.IsRemote(cd) {
+	if objstore.IsObject(cd) {
 		return cd
 	}
 	if cd == "" {
@@ -1368,6 +1419,11 @@ func (c *Config) ResolveSourcePath(s Source) string {
 	if s.LocalPath != "" {
 		return c.resolveLocal(s.LocalPath)
 	}
+	if s.Stream {
+		// Read in place: the URL is the location. Nothing is cached, so there
+		// is no cache path to compose.
+		return s.URL
+	}
 	if s.Build != nil {
 		return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.BuildOutput())
 	}
@@ -1383,6 +1439,15 @@ func (c *Config) ResolveSourcePath(s Source) string {
 // builds it once (at download, or lazily on first annotate) so the gene model can
 // be queried by position instead of loaded whole into memory.
 func (c *Config) ResolveGTFIndexPath(s Source) string {
+	if s.locations != nil && s.locations.GTFIndex != "" {
+		return s.locations.GTFIndex
+	}
+	return c.GTFIndexTarget(s)
+}
+
+// GTFIndexTarget is where a GTF's converted copy should be built, by the
+// cache_dir convention and ignoring any overlay.
+func (c *Config) GTFIndexTarget(s Source) string {
 	return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.Name+".gtf.gz")
 }
 

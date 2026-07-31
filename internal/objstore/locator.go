@@ -20,9 +20,20 @@ import (
 // Scheme prefixes a remote locator.
 const Scheme = "s3://"
 
-// IsRemote reports whether a locator names an object store rather than a
-// filesystem path.
+// IsRemote reports whether a locator names something other than a filesystem
+// path — an object store, or an HTTP server.
+//
+// Any scheme counts, not just s3: cghts resolves http(s) locators as byte
+// sources too, so a source read straight from its origin travels the same code
+// path as one in a bucket.
 func IsRemote(locator string) bool {
+	i := strings.Index(locator, "://")
+	return i > 1
+}
+
+// IsObject reports whether a locator names an object store specifically, which
+// is what provisioning needs to know — uploads go to a bucket, not to a URL.
+func IsObject(locator string) bool {
 	return strings.HasPrefix(locator, Scheme)
 }
 

@@ -1,0 +1,9 @@
+# Where this source's data was provisioned, written by `varhub download`.
+#
+# The manifest beside this file says what the source is and stays portable;
+# this says where this machine put it. Delete it to fall back to resolving
+# under cache_dir.
+
+[[file]]
+  path = "/tmp/TestSourceExplicitIndexURL3082189876/002/cache/clinvar/1/clinvar.vcf.gz"
+  index = "/tmp/TestSourceExplicitIndexURL3082189876/002/cache/clinvar/1/clinvar.vcf.gz.tbi"

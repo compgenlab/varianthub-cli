@@ -1,0 +1,10 @@
+# Where this source's data was provisioned, written by `varhub download`.
+#
+# The manifest beside this file says what the source is and stays portable;
+# this says where this machine put it. Delete it to fall back to resolving
+# under cache_dir.
+
+gtf_index = "/tmp/TestSourceGTFNoIndex396049940/002/cache/gencode/38/gencode.gtf.gz"
+
+[[file]]
+  path = "/tmp/TestSourceGTFNoIndex396049940/002/cache/gencode/38/genes.gtf"

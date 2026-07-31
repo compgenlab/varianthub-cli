@@ -57,6 +57,40 @@ Details worth knowing:
   keys. `AWS_ENDPOINT_URL` points at a non-AWS, S3-compatible target and switches on
   path-style addressing.
 
+### Where the files ended up
+
+A manifest says what a source *is* and stays portable enough to share through a
+registry; where a copy landed is a property of one machine. So `varhub download`
+records the result beside the manifest, as
+`sources/<name>/<version>/<name>-<version>.locations.toml`:
+
+```toml
+[[file]]
+  path  = "s3://vh-sources/prod/clinvar/2026-01/clinvar.vcf.gz"
+  index = "s3://vh-sources/prod/clinvar/2026-01/clinvar.vcf.gz.tbi"
+```
+
+This is what lets **one annotation run read sources from different places** —
+one on local disk, one in a bucket, one streamed from its origin. `cache_dir`
+names a single location, and searching several would cost a round trip per
+source per location on every run.
+
+Details:
+
+- **The overlay is a read-path override.** Provisioning always writes by the
+  `cache_dir` convention and then records where it went, so `--to` genuinely
+  moves a source rather than writing back to wherever it used to be.
+- **Per source, not per home.** Two `download --source` runs cannot collide on a
+  shared file, and deleting a source removes its record with it.
+- **A source with no overlay resolves by convention**, exactly as before. The
+  file only appears where something non-conventional happened.
+- **Entries are keyed by `chrom`/`alt`**, so a per-chromosome source can be
+  split across locations — half in a bucket, half on disk, mid-migration.
+- **`gtf_index` is recorded separately** because a GTF is queried through the
+  converted copy varhub builds, not through what was downloaded.
+- Delete the file to fall back to the convention. A stale entry fails at open
+  with the recorded location named, rather than silently resolving elsewhere.
+
 ### Annotating from an object store
 
 `annotate` reads an `s3://` cache directly, with no local copy of the data. Each source is

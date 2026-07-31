@@ -523,10 +523,12 @@ type SourceFile struct {
 // --to` move a source: it writes by convention to the current cache_dir and
 // records the result, rather than writing back to wherever the file used to be.
 func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
-	out := c.ResolveSourceTargets(s)
 	if s.locations.Empty() {
-		return out
+		return c.ResolveSourceTargets(s)
 	}
+	// A recorded root replaces cache_dir, and the usual layout applies under it,
+	// so a multi-file source needs no per-file bookkeeping.
+	out := c.resolveTargetsIn(s, s.locations.Root)
 	for i := range out {
 		fl, ok := s.locations.File(out[i].Chrom, out[i].Alt)
 		if !ok {
@@ -546,6 +548,21 @@ func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
 // ResolveSourceTargets resolves a source's files by the cache_dir convention,
 // ignoring any overlay — where provisioning should put them.
 func (c *Config) ResolveSourceTargets(s Source) []SourceFile {
+	return c.resolveTargetsIn(s, "")
+}
+
+// resolveTargetsIn resolves a source's files under root, or under cache_dir when
+// root is empty.
+func (c *Config) resolveTargetsIn(s Source, root string) []SourceFile {
+	if root != "" {
+		c2 := *c
+		c2.CacheDir = root
+		c = &c2
+	}
+	return c.resolveTargets(s)
+}
+
+func (c *Config) resolveTargets(s Source) []SourceFile {
 	if s.IsGeneList() {
 		return nil // a genelist has no data file of its own; it reads the referenced GTF
 	}

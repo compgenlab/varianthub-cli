@@ -4,6 +4,4 @@
 # this says where this machine put it. Delete it to fall back to resolving
 # under cache_dir.
 
-[[file]]
-  path = "/tmp/TestSourceExplicitIndexURL3082189876/002/cache/clinvar/1/clinvar.vcf.gz"
-  index = "/tmp/TestSourceExplicitIndexURL3082189876/002/cache/clinvar/1/clinvar.vcf.gz.tbi"
+root = "/tmp/TestSourceExplicitIndexURL4196533773/002/cache"

@@ -24,6 +24,16 @@ import (
 // race on a single shared file and one would lose its entry, leaving data in
 // place that nothing knows about. Separate files cannot collide.
 type Locations struct {
+	// Root replaces cache_dir for this source: its files resolve under here by
+	// the usual <name>/<version>/<basename> convention.
+	//
+	// This is the common case and the reason the overlay is worth having. A
+	// deployment that provisioned a source to a bucket knows one fact — which
+	// bucket — and per-file entries would make it restate the layout it did not
+	// choose. Multi-file sources follow automatically, since the convention
+	// still applies underneath.
+	Root string `toml:"root,omitempty"`
+
 	// GTFIndex is the bgzipped+indexed copy a GTF source is queried through.
 	// Recorded separately because it is not one of the downloaded files:
 	// varhub converts the original and reads the result, so recording only the
@@ -83,7 +93,7 @@ func (c *Config) LoadLocations(name, version string) (*Locations, error) {
 // Empty reports whether the overlay records nothing, in which case resolution
 // falls back to the cache_dir convention.
 func (l *Locations) Empty() bool {
-	return l == nil || (l.GTFIndex == "" && len(l.Files) == 0)
+	return l == nil || (l.Root == "" && l.GTFIndex == "" && len(l.Files) == 0)
 }
 
 // File returns the recorded location for one file of a source, matched by the

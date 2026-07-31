@@ -1344,23 +1344,27 @@ func recordLocations(ctx context.Context, cfg *config.Config, src config.Source)
 	if src.IsBuiltinSource() || src.IsGeneList() || src.Stream {
 		return nil // nothing is provisioned, so there is nothing to record
 	}
-	loc := &config.Locations{}
+	// Record the root, not each file: the layout under it is the convention
+	// varhub already applies, so restating it per file would be duplication that
+	// can drift. Per-file entries stay available for irregular cases.
+	loc := &config.Locations{Root: cfg.CacheDirAbs()}
+	anyLocal := false
 	for _, f := range cfg.ResolveSourceTargets(src) {
 		if f.Local {
-			continue // a localpath source is used in place; the manifest already says where
+			anyLocal = true // used in place; the manifest already says where
 		}
-		entry := config.FileLocation{Chrom: f.Chrom, Alt: f.Alt, Path: f.Path}
-		if ext, ok, err := anyIndexAt(ctx, f.Path); err == nil && ok {
-			entry.Index = f.Path + ext
-		}
-		loc.Files = append(loc.Files, entry)
 	}
-	if src.IsGTFSource() {
+	if anyLocal {
+		loc.Root = ""
+	}
+	if src.IsGTFSource() && loc.Root != "" {
+		// A GTF is queried through the converted copy, whose name differs from
+		// the download, so the root alone does not locate it.
 		loc.GTFIndex = cfg.GTFIndexTarget(src)
 	}
 
 	saved := cfg.NewLocations(src.Name, src.Version, loc)
-	if len(loc.Files) == 0 && loc.GTFIndex == "" {
+	if loc.Root == "" && len(loc.Files) == 0 && loc.GTFIndex == "" {
 		// Nothing recorded: drop any stale overlay rather than leaving it to
 		// point at files this run did not produce.
 		return saved.Delete()

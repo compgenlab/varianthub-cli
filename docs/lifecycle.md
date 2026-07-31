@@ -65,9 +65,17 @@ records the result beside the manifest, as
 `sources/<name>/<version>/<name>-<version>.locations.toml`:
 
 ```toml
+root = "s3://vh-sources/prod"
+```
+
+A root is usually all it needs to say: the `<name>/<version>/<basename>` layout
+still applies underneath, so multi-file and per-chromosome sources follow
+automatically. Per-file entries are there for irregular cases:
+
+```toml
 [[file]]
-  path  = "s3://vh-sources/prod/clinvar/2026-01/clinvar.vcf.gz"
-  index = "s3://vh-sources/prod/clinvar/2026-01/clinvar.vcf.gz.tbi"
+  chrom = "chr1"
+  path  = "s3://vh-sources/prod/gnomad/4.1/gnomad.chr1.vcf.gz"
 ```
 
 This is what lets **one annotation run read sources from different places** —

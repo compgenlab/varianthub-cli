@@ -4,6 +4,4 @@
 # this says where this machine put it. Delete it to fall back to resolving
 # under cache_dir.
 
-[[file]]
-  path = "s3://bucket/prefix/src/1/src.vcf.gz"
-  index = "s3://bucket/prefix/src/1/src.vcf.gz.tbi"
+root = "s3://bucket/prefix"

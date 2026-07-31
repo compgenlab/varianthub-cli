@@ -4,5 +4,4 @@
 # this says where this machine put it. Delete it to fall back to resolving
 # under cache_dir.
 
-[[file]]
-  path = "/tmp/TestSourceBigWigNoIndex2486910558/002/cache/revel/1.3/scores.bw"
+root = "/tmp/TestSourceBigWigNoIndex1467355767/002/cache"

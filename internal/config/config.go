@@ -276,6 +276,16 @@ type Source struct {
 	// Annotations declared on this source (nested; their Source is this source's
 	// Name, or the builtin name for a type="builtin" source).
 	Annotations []Annotation `toml:"annotations,omitempty"`
+
+	// Stream reads the source from its URL instead of caching a copy. For
+	// something like gnomAD — tens of gigabytes, queried at a handful of loci —
+	// downloading it to read 0.01% of it is the wrong trade. The index is
+	// fetched whole and the data by range request.
+	Stream bool `toml:"stream,omitempty"`
+
+	// locations is the overlay recording where this source's data was actually
+	// provisioned. Attached at load time; not part of the manifest.
+	locations *Locations
 }
 
 // DisplayTitle is the source's human-readable name (Title), falling back to its
@@ -505,7 +515,71 @@ type SourceFile struct {
 // ResolveSourceFiles returns the concrete file(s) for a source: one per entry of an
 // explicit Files list, or one per chromosome for a {chrom} template, else a single
 // file.
+// ResolveSourceFiles resolves a source's files for *reading*, applying the
+// location overlay when one is recorded.
+//
+// Provisioning wants the other question — where should this go? — and asks
+// [Config.ResolveSourceTargets]. Keeping them apart is what lets `download
+// --to` move a source: it writes by convention to the current cache_dir and
+// records the result, rather than writing back to wherever the file used to be.
 func (c *Config) ResolveSourceFiles(s Source) []SourceFile {
+	if s.locations.Empty() {
+		out := c.ResolveSourceTargets(s)
+		if s.Stream {
+			// Read in place: the url is the location, and there is no cached
+			// copy to point at. Applied here and not in ResolveSourcePath
+			// because that serves provisioning too — resolving a *target* to
+			// the url makes `download --no-stream` write to a directory named
+			// after it.
+			for i := range out {
+				out[i].Path = out[i].URL
+				out[i].IndexPath = out[i].URLIndex
+			}
+		}
+		return out
+	}
+	// A recorded root replaces cache_dir, and the usual layout applies under it,
+	// so a multi-file source needs no per-file bookkeeping.
+	out := c.resolveTargetsIn(s, s.locations.Root)
+	for i := range out {
+		fl, ok := s.locations.File(out[i].Chrom, out[i].Alt)
+		if !ok {
+			continue
+		}
+		// Path only. Local stays as the manifest declared it: it means "never
+		// download", which an overlay entry does not, and conflating the two
+		// would make download skip sources it should refresh.
+		out[i].Path = fl.Path
+		if fl.Index != "" {
+			out[i].IndexPath = fl.Index
+		}
+	}
+	return out
+}
+
+// ResolveSourceTargets resolves a source's files by the cache_dir convention,
+// ignoring any overlay — where provisioning should put them.
+func (c *Config) ResolveSourceTargets(s Source) []SourceFile {
+	return c.resolveTargetsIn(s, "")
+}
+
+// resolveTargetsIn resolves a source's files under root, or under cache_dir when
+// root is empty.
+func (c *Config) resolveTargetsIn(s Source, root string) []SourceFile {
+	if root != "" {
+		c2 := *c
+		c2.CacheDir = root
+		c = &c2
+		// A recorded location means the data was provisioned somewhere, so read
+		// that copy even if the manifest prefers streaming. `stream` is the
+		// publisher's suggestion; downloading it is the operator's decision, and
+		// having downloaded it should not leave reads going to the origin.
+		s.Stream = false
+	}
+	return c.resolveTargets(s)
+}
+
+func (c *Config) resolveTargets(s Source) []SourceFile {
 	if s.IsGeneList() {
 		return nil // a genelist has no data file of its own; it reads the referenced GTF
 	}
@@ -1157,6 +1231,27 @@ func (snap *Snapshot) validate() error {
 		if seen[s.ID()] {
 			return fmt.Errorf("duplicate source %q", s.ID())
 		}
+		if s.Stream {
+			if s.LocalPath != "" {
+				return fmt.Errorf("source %q: `stream` and `localpath` contradict — one reads from the url, the other from disk", s.ID())
+			}
+			if s.Build != nil {
+				return fmt.Errorf("source %q: `stream` cannot combine with `build`, which produces a local file", s.ID())
+			}
+			// Every file has to name where to read it from. A source may state
+			// one url at the top — templated by {chrom} or {alt} — or give each
+			// file its own in [[sources.files]]; CADD does the latter, with a
+			// SNV table and an indel table that share nothing but their columns.
+			if len(s.Files) > 0 {
+				for i, f := range s.Files {
+					if f.URL == "" && f.LocalPath == "" {
+						return fmt.Errorf("source %q: `stream` needs a `url` on every [[sources.files]] entry (entry %d has none)", s.ID(), i+1)
+					}
+				}
+			} else if s.URL == "" {
+				return fmt.Errorf("source %q: `stream` reads from `url`, so the source needs one (or a url on each [[sources.files]] entry)", s.ID())
+			}
+		}
 		seen[s.ID()] = true
 		if s.IsTool() {
 			if err := validateToolSource(s); err != nil {
@@ -1317,6 +1412,16 @@ func (snap *Snapshot) DataSources() []model.DataSource {
 	return out
 }
 
+// SetBaseDir sets the directory relative paths resolve against — what Load()
+// infers from the config file's own location.
+//
+// Exported because a Config built in code, rather than loaded from disk, has an
+// empty base and silently resolves every relative path against the process
+// working directory. That is not a hypothetical: a test built one, and the
+// download it ran wrote a source's files and its location overlay into the
+// package directory, where they were committed.
+func (c *Config) SetBaseDir(dir string) { c.dir = dir }
+
 // resolveDir resolves a configured directory relative to the config file (unless
 // it is absolute).
 func (c *Config) resolveDir(d string) string {
@@ -1346,7 +1451,7 @@ func (c *Config) DatabasePathAbs() string {
 // would eat the scheme's second slash.
 func (c *Config) CacheDirAbs() string {
 	cd := c.CacheDir
-	if objstore.IsRemote(cd) {
+	if objstore.IsObject(cd) {
 		return cd
 	}
 	if cd == "" {
@@ -1368,6 +1473,7 @@ func (c *Config) ResolveSourcePath(s Source) string {
 	if s.LocalPath != "" {
 		return c.resolveLocal(s.LocalPath)
 	}
+
 	if s.Build != nil {
 		return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.BuildOutput())
 	}
@@ -1383,6 +1489,15 @@ func (c *Config) ResolveSourcePath(s Source) string {
 // builds it once (at download, or lazily on first annotate) so the gene model can
 // be queried by position instead of loaded whole into memory.
 func (c *Config) ResolveGTFIndexPath(s Source) string {
+	if s.locations != nil && s.locations.GTFIndex != "" {
+		return s.locations.GTFIndex
+	}
+	return c.GTFIndexTarget(s)
+}
+
+// GTFIndexTarget is where a GTF's converted copy should be built, by the
+// cache_dir convention and ignoring any overlay.
+func (c *Config) GTFIndexTarget(s Source) string {
 	return objstore.Join(c.CacheDirAbs(), s.Name, s.Version, s.Name+".gtf.gz")
 }
 

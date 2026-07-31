@@ -92,6 +92,19 @@ var keepTemp bool
 // SetKeepTemp controls whether fetch keeps its scratch directories (default false).
 func SetKeepTemp(keep bool) { keepTemp = keep }
 
+// ignoreStream provisions sources that declare `stream = true` anyway.
+//
+// The flag in a manifest is the publisher saying "you do not need a copy of
+// this" — reasonable for a 24 GB file queried at a handful of loci. It is not a
+// policy: an operator running whole genomes, or one who wants results pinned to
+// bytes that cannot change underneath them, wants the copy. Toggled by
+// `download --no-stream`.
+var ignoreStream bool
+
+// SetIgnoreStream controls whether `stream = true` sources are downloaded
+// anyway (default false).
+func SetIgnoreStream(ignore bool) { ignoreStream = ignore }
+
 // cleanupTemp removes a scratch dir unless keepTemp is set, in which case it logs
 // the retained path.
 func cleanupTemp(dir, label string) {
@@ -122,17 +135,23 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
 		return nil, err
 	}
-	remoteCache := objstore.IsRemote(cfg.CacheDirAbs())
+	remoteCache := objstore.IsObject(cfg.CacheDirAbs())
 	type work struct {
 		src     config.Source
 		files   []config.SourceFile
 		results []fileResult // one per file (distinct indices ⇒ safe concurrent writes)
 	}
 	var works []*work
-	var builds, tools, remoteGTFs []config.Source
+	var builds, tools, remoteGTFs, streamed []config.Source
 	matched := false
 	for _, s := range snap.Sources {
 		if s.IsBuiltinSource() {
+			continue
+		}
+		if s.Stream && !ignoreStream {
+			// Read in place; there is nothing to fetch. Reported so the run
+			// still accounts for every source in the snapshot.
+			streamed = append(streamed, s)
 			continue
 		}
 		if only != "" && s.Name != only && s.ID() != only {
@@ -152,7 +171,7 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 			remoteGTFs = append(remoteGTFs, s)
 			continue
 		}
-		files := cfg.ResolveSourceFiles(s)
+		files := cfg.ResolveSourceTargets(s)
 		works = append(works, &work{src: s, files: files, results: make([]fileResult, len(files))})
 	}
 	if only != "" && !matched {
@@ -181,7 +200,10 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs))
+	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs)+len(streamed))
+	for _, s := range streamed {
+		results = append(results, Result{Source: s.ID(), Data: "streamed", Index: "remote"})
+	}
 	for _, s := range remoteGTFs {
 		r, err := fetchGTFRemote(ctx, cfg, s, force, keepRaw)
 		if err != nil {
@@ -202,6 +224,9 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 			if !keepRaw {
 				r.Freed = pruneRaw(cfg, w.src)
 			}
+		}
+		if err := recordLocations(ctx, cfg, w.src); err != nil {
+			return nil, fmt.Errorf("%s: recording locations: %w", w.src.ID(), err)
 		}
 		results = append(results, r)
 	}
@@ -305,7 +330,7 @@ func buildSource(ctx context.Context, cfg *config.Config, src config.Source, for
 	// A remote cache is published from the build workdir: the recipe output is
 	// already local and already temporary, so it is indexed and verified where
 	// it stands and only the verified pair is uploaded.
-	if objstore.IsRemote(out) {
+	if objstore.IsObject(out) {
 		idx, err := ensureIndex(ctx, config.SourceFile{Path: built}, built, src.Format, force)
 		if err != nil {
 			return Result{}, fmt.Errorf("%s: index: %w", src.ID(), err)
@@ -466,13 +491,16 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 	if src.IsBuiltinSource() {
 		return Result{Source: src.ID(), Data: "-", Index: "-"}, nil
 	}
+	if src.Stream && !ignoreStream {
+		return Result{Source: src.ID(), Data: "streamed", Index: "remote"}, nil
+	}
 	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
 		return Result{}, err
 	}
-	if objstore.IsRemote(cfg.CacheDirAbs()) && src.IsGTFSource() {
+	if objstore.IsObject(cfg.CacheDirAbs()) && src.IsGTFSource() {
 		return fetchGTFRemote(ctx, cfg, src, force, keepRaw)
 	}
-	files := cfg.ResolveSourceFiles(src)
+	files := cfg.ResolveSourceTargets(src)
 	results := make([]fileResult, len(files))
 	for i, f := range files {
 		ds, is, err := fetchFile(ctx, f, src.Format, src.ID(), force)
@@ -491,6 +519,9 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 		if !keepRaw {
 			r.Freed = pruneRaw(cfg, src)
 		}
+	}
+	if err := recordLocations(ctx, cfg, src); err != nil {
+		return Result{}, fmt.Errorf("%s: recording locations: %w", src.ID(), err)
 	}
 	return r, nil
 }
@@ -524,7 +555,7 @@ func fetchFile(ctx context.Context, f config.SourceFile, format, label string, f
 		return "local", idx, nil
 	}
 
-	if objstore.IsRemote(f.Path) {
+	if objstore.IsObject(f.Path) {
 		return fetchFileRemote(ctx, f, format, label, selfIndexed, force)
 	}
 
@@ -637,6 +668,14 @@ func Missing(cfg *config.Config, src config.Source) []string {
 	if src.IsBuiltinSource() {
 		return nil
 	}
+	if src.Stream && !src.HasLocations() {
+		// Nothing is expected on disk. Whether the origin is reachable is a
+		// question for the annotate open, which reports it precisely; probing
+		// every streamed source here would add a network round trip to every
+		// run just to produce a worse error. A recorded location means a copy
+		// was downloaded anyway, and that copy is checked like any other.
+		return nil
+	}
 	if src.IsGeneList() {
 		// A genelist has no data file of its own: it needs the referenced GTF
 		// present (indexed) and its genes_file, if any.
@@ -649,7 +688,7 @@ func Missing(cfg *config.Config, src config.Source) []string {
 		}
 		return missing
 	}
-	if objstore.IsRemote(cfg.CacheDirAbs()) {
+	if objstore.IsObject(cfg.CacheDirAbs()) {
 		return missingRemote(context.Background(), cfg, src)
 	}
 	var missing []string
@@ -765,7 +804,7 @@ func presetFor(format string) (*tabix.WriterOpts, error) {
 // status is "pre-indexed" | "reused" | "built". force rebuilds the cached index.
 func EnsureIndexedGTF(cfg *config.Config, src config.Source, force bool) (path, status string, err error) {
 	raw := cfg.ResolveSourcePath(src)
-	if objstore.IsRemote(raw) {
+	if objstore.IsObject(raw) {
 		return ensureIndexedGTFRemote(context.Background(), cfg, src, raw)
 	}
 	// A .gz raw with a sidecar tabix index is already usable directly.
@@ -815,7 +854,7 @@ func PruneRawGTF(cfg *config.Config, src config.Source) (freed int64, err error)
 	if raw == idx {
 		return 0, nil
 	}
-	if objstore.IsRemote(raw) {
+	if objstore.IsObject(raw) {
 		return pruneRawGTFRemote(context.Background(), raw, idx)
 	}
 	// A pre-indexed raw is what queries read. Deleting it would remove the data.
@@ -1114,7 +1153,7 @@ func fetchGTFRemote(ctx context.Context, cfg *config.Config, src config.Source,
 	force, keepRaw bool) (Result, error) {
 
 	label := src.ID()
-	files := cfg.ResolveSourceFiles(src)
+	files := cfg.ResolveSourceTargets(src)
 	if len(files) != 1 {
 		return Result{}, fmt.Errorf("%s: a GTF source must resolve to one file, got %d", label, len(files))
 	}
@@ -1182,6 +1221,9 @@ func fetchGTFRemote(ctx context.Context, cfg *config.Config, src config.Source,
 		}
 	}
 	logf("%s: uploaded %s", label, objstore.Base(idx))
+	if err := recordLocations(ctx, cfg, src); err != nil {
+		return Result{}, fmt.Errorf("%s: recording locations: %w", label, err)
+	}
 	return res, nil
 }
 
@@ -1304,4 +1346,42 @@ func ensureIndexedGTFRemote(ctx context.Context, cfg *config.Config, src config.
 		}
 	}
 	return "", "", fmt.Errorf("no indexed GTF at %s (run `varhub download`)", idx)
+}
+
+// recordLocations writes the overlay for a source that was just provisioned,
+// so a later run reads it from where it actually went rather than from wherever
+// the current cache_dir happens to point.
+//
+// Written per source, beside its manifest: two concurrent `download --source`
+// runs cannot collide, and deleting a source removes its record with it.
+func recordLocations(ctx context.Context, cfg *config.Config, src config.Source) error {
+	if src.IsBuiltinSource() || src.IsGeneList() {
+		return nil // nothing is provisioned, so there is nothing to record
+	}
+	// Record the root, not each file: the layout under it is the convention
+	// varhub already applies, so restating it per file would be duplication that
+	// can drift. Per-file entries stay available for irregular cases.
+	loc := &config.Locations{Root: cfg.CacheDirAbs()}
+	anyLocal := false
+	for _, f := range cfg.ResolveSourceTargets(src) {
+		if f.Local {
+			anyLocal = true // used in place; the manifest already says where
+		}
+	}
+	if anyLocal {
+		loc.Root = ""
+	}
+	if src.IsGTFSource() && loc.Root != "" {
+		// A GTF is queried through the converted copy, whose name differs from
+		// the download, so the root alone does not locate it.
+		loc.GTFIndex = cfg.GTFIndexTarget(src)
+	}
+
+	saved := cfg.NewLocations(src.Name, src.Version, loc)
+	if loc.Root == "" && len(loc.Files) == 0 && loc.GTFIndex == "" {
+		// Nothing recorded: drop any stale overlay rather than leaving it to
+		// point at files this run did not produce.
+		return saved.Delete()
+	}
+	return saved.Save()
 }

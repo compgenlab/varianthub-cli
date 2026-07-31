@@ -59,7 +59,7 @@ func SetStore(s objstore.Store) {
 
 // locatorExists reports whether a cache locator currently holds a file.
 func locatorExists(ctx context.Context, loc string) (bool, error) {
-	if !objstore.IsRemote(loc) {
+	if !objstore.IsObject(loc) {
 		return fileExists(loc), nil
 	}
 	store, err := remoteStore()
@@ -76,7 +76,7 @@ func locatorExists(ctx context.Context, loc string) (bool, error) {
 
 // locatorSize returns the size of whatever is at a locator.
 func locatorSize(ctx context.Context, loc string) (int64, bool, error) {
-	if !objstore.IsRemote(loc) {
+	if !objstore.IsObject(loc) {
 		fi, err := os.Stat(loc)
 		if err != nil {
 			return 0, false, nil
@@ -97,7 +97,7 @@ func locatorSize(ctx context.Context, loc string) (int64, bool, error) {
 
 // locatorRemove deletes whatever is at a locator, tolerating its absence.
 func locatorRemove(ctx context.Context, loc string) error {
-	if !objstore.IsRemote(loc) {
+	if !objstore.IsObject(loc) {
 		if err := os.Remove(loc); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -190,7 +190,7 @@ func (s *staging) publish(ctx context.Context, final, checksum string, sidecars 
 // Without this the first symptom is a credential error from deep inside a
 // download loop, after the user has already waited for other sources.
 func checkRemoteReady(ctx context.Context, cacheDir string) error {
-	if !objstore.IsRemote(cacheDir) {
+	if !objstore.IsObject(cacheDir) {
 		return nil
 	}
 	ref, err := objstore.Parse(cacheDir)

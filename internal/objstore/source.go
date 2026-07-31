@@ -18,7 +18,8 @@ import (
 // in this package, because writing is varhub's concern and not something a
 // read-oriented I/O library should carry.
 
-// OpenTabix opens a tabix-indexed file at a cache locator, local or remote.
+// OpenTabix opens a tabix-indexed file at a locator: a filesystem path, an
+// http(s):// URL, or an object in a store.
 //
 // The index suffix is resolved by trying .tbi then .csi, matching the
 // path-based reader, so a source indexed either way works remotely without the

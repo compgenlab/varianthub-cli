@@ -114,12 +114,18 @@ func (cs *countingServer) hits() int {
 	return cs.n
 }
 
-func remoteCfg(cache string) *config.Config {
-	return &config.Config{CacheDir: cache}
+// remoteCfg builds a config rooted in a temp dir. The base matters: without it
+// relative paths — the annotations tree a location overlay is written into —
+// resolve against the package directory, and the test writes into the repo.
+func remoteCfg(t *testing.T, cache string) *config.Config {
+	t.Helper()
+	c := &config.Config{CacheDir: cache, DataDir: t.TempDir(), AnnotationsDir: "annotations"}
+	c.SetBaseDir(t.TempDir())
+	return c
 }
 
 func TestRemoteCacheIsRecognised(t *testing.T) {
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	if got := cfg.CacheDirAbs(); got != "s3://bucket/prefix" {
 		t.Fatalf("CacheDirAbs mangled the locator: %q", got)
 	}
@@ -138,7 +144,7 @@ func TestRemoteFetchPublishesVerifiedPair(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "src", Version: "1", Format: "vcf", URL: ts.URL + "/src.vcf.gz"}
 	if _, err := Source(context.Background(), cfg, src, false, false); err != nil {
 		t.Fatalf("Source: %v", err)
@@ -167,7 +173,7 @@ func TestRemoteFetchSkipsWhenComplete(t *testing.T) {
 	cs := newCountingServer(srvDir)
 	defer cs.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "src", Version: "1", Format: "vcf", URL: cs.URL + "/src.vcf.gz"}
 	ctx := context.Background()
 	if _, err := Source(ctx, cfg, src, false, false); err != nil {
@@ -198,7 +204,7 @@ func TestRemoteFetchRebuildsWhenIndexMissing(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "src", Version: "1", Format: "vcf", URL: ts.URL + "/src.vcf.gz"}
 	ctx := context.Background()
 	if _, err := Source(ctx, cfg, src, false, false); err != nil {
@@ -225,7 +231,7 @@ func TestRemoteFetchUploadsNothingOnChecksumMismatch(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{
 		Name: "src", Version: "1", Format: "vcf",
 		URL:      ts.URL + "/src.vcf.gz",
@@ -251,7 +257,7 @@ func TestRemoteGTFPublishesConvertedOnly(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "genes", Version: "1", Format: "gtf", URL: ts.URL + "/genes.gtf"}
 	if _, err := Source(context.Background(), cfg, src, false, false); err != nil {
 		t.Fatalf("Source: %v", err)
@@ -278,7 +284,7 @@ func TestRemoteGTFKeepRawPublishesOriginal(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "genes", Version: "1", Format: "gtf", URL: ts.URL + "/genes.gtf"}
 	if _, err := Source(context.Background(), cfg, src, false, true); err != nil {
 		t.Fatalf("Source: %v", err)
@@ -291,7 +297,7 @@ func TestRemoteGTFKeepRawPublishesOriginal(t *testing.T) {
 // Missing() must consult the object store rather than the filesystem.
 func TestMissingChecksTheObjectStore(t *testing.T) {
 	store := useStub(t)
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "src", Version: "1", Format: "vcf", URL: "https://x/src.vcf.gz"}
 
 	if m := Missing(cfg, src); len(m) == 0 {

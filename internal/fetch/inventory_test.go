@@ -20,7 +20,7 @@ func TestInventoryRemote(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "src", Version: "1", Format: "vcf", URL: ts.URL + "/src.vcf.gz"}
 	ctx := context.Background()
 
@@ -71,7 +71,7 @@ func TestInventoryCoversConvertedGTF(t *testing.T) {
 	ts := httptest.NewServer(http.FileServer(http.Dir(srvDir)))
 	defer ts.Close()
 
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "genes", Version: "1", Format: "gtf", URL: ts.URL + "/genes.gtf"}
 	ctx := context.Background()
 	if _, err := Source(ctx, cfg, src, false, false); err != nil {
@@ -96,7 +96,7 @@ func TestInventoryCoversConvertedGTF(t *testing.T) {
 
 // Builtins occupy nothing.
 func TestInventoryBuiltinIsEmpty(t *testing.T) {
-	cfg := remoteCfg("s3://bucket/prefix")
+	cfg := remoteCfg(t, "s3://bucket/prefix")
 	src := config.Source{Name: "builtins", Version: "1", Type: "builtin"}
 	files, err := Inventory(context.Background(), cfg, src)
 	if err != nil || len(files) != 0 {

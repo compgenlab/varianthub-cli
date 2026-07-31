@@ -48,6 +48,12 @@ checksum_index = "md5:…"
   strips `localpath`.
 - **`checksum`/`checksum_index`** are optional (`md5`|`sha1`|`sha256`); verified while
   downloading when present. The value may be a URL to a checksum file.
+- **`stream = true`** reads the source from its `url` instead of caching a copy.
+  For something like gnomAD — tens of gigabytes, queried at a handful of loci —
+  downloading it to read a fraction of a percent is the wrong trade: the index is
+  fetched whole and the data by range request. `varhub download` skips such a
+  source entirely. It requires a `url`, and cannot combine with `localpath` or
+  `build`, which both mean "there is a local file".
 - **Data must be coordinate sorted** when varhub has to build the index itself (no
   `url_index`, and no `.tbi`/`.csi` published beside the data). Two rules: positions
   ascend within a contig — equal positions are fine, so a multiallelic site split across

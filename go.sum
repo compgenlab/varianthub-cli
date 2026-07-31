@@ -82,6 +82,8 @@ github.com/clipperhouse/stringish v0.1.1 h1:+NSqMOr3GR6k1FdRhhnXrLfztGzuG+VuFDfa
 github.com/clipperhouse/stringish v0.1.1/go.mod h1:v/WhFtE1q0ovMta2+m+UbpZ+2/HEXNWYXQgCt4hdOzA=
 github.com/clipperhouse/uax29/v2 v2.5.0 h1:x7T0T4eTHDONxFJsL94uKNKPHrclyFI0lm7+w94cO8U=
 github.com/clipperhouse/uax29/v2 v2.5.0/go.mod h1:Wn1g7MK6OoeDT0vL+Q0SQLDz/KpfsVRgg6W7ihQeh4g=
+github.com/compgenlab/cghts v0.7.5 h1:06uynqxXFs7b8HKEavEWF5wWjMr0KywUOYPzT4fQpC0=
+github.com/compgenlab/cghts v0.7.5/go.mod h1:uGhwCm/cVAgUH5fXhKDcfSMa0XkO1N3/L1G4opci63M=
 github.com/compgenlab/cghts v0.8.0 h1:gTQKok6+bJcnlGjs7FPtZ0fnBy4mhPSrDdLZ/OlNAHE=
 github.com/compgenlab/cghts v0.8.0/go.mod h1:uGhwCm/cVAgUH5fXhKDcfSMa0XkO1N3/L1G4opci63M=
 github.com/compgenlab/cghts v0.9.0 h1:nrb/26uY+q2FVYSVE5y5I8qls3Eww/Eg8AEsF8FbGMM=

@@ -173,14 +173,23 @@ cache_setup   = true           # publish the setup output for other machines
   to, name a **digest** (`repo@sha256:…`) rather than a tag; a tag can be
   re-pushed.
 - **`cache_setup`** archives the tool's data dir to the object store once setup
-  succeeds, and restores it on a machine that has none. Setup that takes hours
-  becomes a tarball fetch.
+  succeeds, and restores it on a machine that has none.
 
-Opt-in rather than automatic, for two reasons that have nothing to do with
-performance. Setup output can be very large, so copying it is a real cost the
-source author should choose. And it can be **licensed** — a tool may install
-data this deployment may use but not redistribute, and copying that into a
-shared bucket is not a decision to make on someone's behalf.
+**Most installations do not need `cache_setup`.** It does nothing unless
+`cache_dir` is an object store, and a `cache_dir` on a filesystem — a local disk,
+or shared storage such as NFS or Lustre — already holds the tool's data as a
+directory that every machine reading that path can see. Install once, leave it,
+and there is nothing to copy.
+
+It exists for the case where the machine that runs setup is not the machine that
+uses it: containers with ephemeral disks, where a new one starts with nothing and
+would otherwise repeat a multi-hour install. There, the first machine publishes
+an archive and the rest unpack it.
+
+Opt-in rather than automatic even then. Setup output can be very large, so
+copying it is a real cost. And it can be **licensed** — a tool may install data
+this deployment may use but not redistribute, and copying that into a shared
+bucket is not a decision to make on someone's behalf.
 
 Whatever the cache holds, tool images and tool data are always *materialized
 locally*: a container binds `{datadir}`, and apptainer runs a `.sif` from a

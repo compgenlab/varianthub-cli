@@ -42,6 +42,19 @@ type Locations struct {
 
 	Files []FileLocation `toml:"file"`
 
+	// CacheSetup publishes a tool's data directory to the object store after
+	// setup, and restores it on a machine that has none.
+	//
+	// A deployment fact, not a source one, which is why it lives here rather
+	// than in the manifest. Whether the machine that runs a tool's setup is the
+	// machine that later uses it depends on how something is deployed —
+	// containers with ephemeral disks need this, a fixed install does not — and
+	// a manifest shared through a registry would be asserting it for everyone.
+	//
+	// Nothing in the CLI's own use sets it: a cache_dir on a filesystem already
+	// holds the data where every machine reading that path can see it.
+	CacheSetup bool `toml:"cache_setup,omitempty"`
+
 	path string // where it was loaded from, for writing back
 }
 
@@ -90,8 +103,15 @@ func (c *Config) LoadLocations(name, version string) (*Locations, error) {
 	return l, nil
 }
 
+// CacheSetupEnabled reports whether this source's tool data should be published.
+func (l *Locations) CacheSetupEnabled() bool { return l != nil && l.CacheSetup }
+
 // Empty reports whether the overlay records nothing, in which case resolution
 // falls back to the cache_dir convention.
+//
+// CacheSetup is deliberately not counted: it says nothing about where files are,
+// so an overlay carrying only that must still leave resolution to the
+// convention rather than looking like it overrides something.
 func (l *Locations) Empty() bool {
 	return l == nil || (l.Root == "" && l.GTFIndex == "" && len(l.Files) == 0)
 }

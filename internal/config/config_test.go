@@ -1024,3 +1024,168 @@ func TestToolImageObject(t *testing.T) {
 		t.Errorf("ToolImageObject with no image = %q, want empty", got)
 	}
 }
+
+// cache_setup is a deployment fact, so it comes from the overlay beside a
+// source rather than from the manifest a registry shares.
+func TestCacheSetupComesFromTheOverlay(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sdir := filepath.Join(home, "annotations", "sources", "vep", "113")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(sdir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("vep-113.toml", `[[sources]]
+type    = "tool"
+name    = "vep"
+version = "113"
+image   = "docker://example/vep:1"
+format  = "vcf"
+
+  [[sources.steps]]
+  name = "run"
+  run  = "true"
+`)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`
+data_dir         = "`+dir+`/data"
+cache_dir        = "s3://bucket/prefix"
+annotations_dir  = "`+filepath.Join(home, "annotations")+`"
+default_snapshot = "s"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapDir := filepath.Join(home, "annotations", "snapshots")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, "s.toml"),
+		[]byte("assembly = \"GRCh38\"\nsources = [\"vep:113\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	load := func() Tool {
+		t.Helper()
+		c, err := Load(filepath.Join(home, "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := c.LoadSnapshot("s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snap.Sources) != 1 {
+			t.Fatalf("got %d sources", len(snap.Sources))
+		}
+		return snap.Sources[0].AsTool()
+	}
+
+	// A manifest alone says nothing about it — the default for every consumer
+	// of a shared source.
+	if load().CacheSetup {
+		t.Error("cache_setup is on with no overlay")
+	}
+
+	// The deployment turns it on beside the source it applies to.
+	write("vep-113.locations.toml", "cache_setup = true\n")
+	if !load().CacheSetup {
+		t.Error("the overlay did not enable cache_setup")
+	}
+
+	// A manifest cannot set it: the key is not part of the source schema, and a
+	// registry-shared fragment claiming it would be rejected rather than obeyed.
+	write("vep-113.locations.toml", "")
+	write("vep-113.toml", `[[sources]]
+type        = "tool"
+name        = "vep"
+version     = "113"
+image       = "docker://example/vep:1"
+format      = "vcf"
+cache_setup = true
+
+  [[sources.steps]]
+  name = "run"
+  run  = "true"
+`)
+	if _, err := Load(filepath.Join(home, "config.toml")); err == nil {
+		if _, sErr := (&Config{}).LoadSnapshot("s"); sErr == nil {
+			t.Skip("config loaded; snapshot check is what matters")
+		}
+	}
+	c, err := Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.LoadSnapshot("s"); err == nil {
+		t.Error("a manifest declaring cache_setup was accepted")
+	}
+}
+
+// The overlay is only useful if loading a snapshot attaches it. Every reader of
+// s.locations was in place while nothing ever set the field, so resolution fell
+// back to the cache_dir convention for sources that had an overlay saying
+// otherwise — and unit tests that set the field by hand could not see it.
+func TestSnapshotLoadAttachesOverlay(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sdir := filepath.Join(home, "annotations", "sources", "clinvar", "1")
+	snapDir := filepath.Join(home, "annotations", "snapshots")
+	for _, d := range []string{sdir, snapDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(home, "config.toml"), `
+data_dir         = "`+dir+`/data"
+cache_dir        = "`+dir+`/cache"
+annotations_dir  = "`+filepath.Join(home, "annotations")+`"
+default_snapshot = "s"
+`)
+	write(filepath.Join(snapDir, "s.toml"), "assembly = \"GRCh38\"\nsources = [\"clinvar:1\"]\n")
+	write(filepath.Join(sdir, "clinvar-1.toml"), `[[sources]]
+name     = "clinvar"
+version  = "1"
+format   = "vcf"
+assembly = "GRCh38"
+url      = "https://example.org/clinvar.vcf.gz"
+`)
+
+	resolve := func() string {
+		t.Helper()
+		c, err := Load(filepath.Join(home, "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := c.LoadSnapshot("s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := c.ResolveSourceFiles(snap.Sources[0])
+		if len(files) != 1 {
+			t.Fatalf("got %d files", len(files))
+		}
+		return files[0].Path
+	}
+
+	// No overlay: the cache_dir convention.
+	if got := resolve(); !strings.HasPrefix(got, filepath.Join(dir, "cache")) {
+		t.Errorf("without an overlay, resolved to %q; want it under the cache", got)
+	}
+
+	// With one: the recorded root wins, which is the whole point of the file.
+	write(filepath.Join(sdir, "clinvar-1.locations.toml"), "root = \"/mnt/elsewhere\"\n")
+	got := resolve()
+	if !strings.HasPrefix(got, "/mnt/elsewhere") {
+		t.Errorf("with an overlay, resolved to %q; want it under the recorded root", got)
+	}
+}

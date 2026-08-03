@@ -267,11 +267,10 @@ type Source struct {
 	// {pos} {pos0} {ref} {alt} {end}). Output is consumed like a data source of Format
 	// (vcf|tab). Setup runs once (image acquire time); Steps run per annotate.
 	Image string `toml:"image,omitempty"`
-	// See Tool.ImageChecksum and Tool.CacheSetup — declared here because a tool
-	// is a [[sources]] entry with type = "tool", and the fragment decoder
-	// rejects a key this struct does not know.
+	// See Tool.ImageChecksum — declared here because a tool is a [[sources]]
+	// entry with type = "tool", and the fragment decoder rejects a key this
+	// struct does not know.
 	ImageChecksum string `toml:"image_checksum,omitempty"`
-	CacheSetup    bool   `toml:"cache_setup,omitempty"`
 	Engine        string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
 	InputFormat   string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
 	Output        string `toml:"output,omitempty"`       // output filename the last step writes
@@ -433,7 +432,10 @@ func (s Source) AsTool() Tool {
 		InputFormat: s.InputFormat, RefCol: s.RefCol, AltCol: s.AltCol,
 		Setup: s.Setup, Threads: s.Threads, Steps: s.Steps,
 		Requires: s.Requires, Assets: s.Assets, Annotations: s.Annotations,
-		ImageChecksum: s.ImageChecksum, CacheSetup: s.CacheSetup,
+		ImageChecksum: s.ImageChecksum,
+		// From the overlay, not the manifest: whether a machine that runs setup
+		// is the machine that uses it is a deployment fact.
+		CacheSetup: s.locations.CacheSetupEnabled(),
 	}
 }
 
@@ -1212,6 +1214,17 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 		frag, err := decodeFragment(c.SourceFile(n, v))
 		if err != nil {
 			return nil, err
+		}
+		// Attach the source's overlay, if it has one. Without this every reader
+		// of s.locations sees nil and resolution silently falls back to the
+		// cache_dir convention — which is correct for a source with no overlay
+		// and wrong for every source with one.
+		loc, err := c.LoadLocations(n, v)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %q: source %s:%s: %w", name, n, v, err)
+		}
+		for i := range frag.Sources {
+			frag.Sources[i].locations = loc
 		}
 		snap.Sources = append(snap.Sources, frag.Sources...)
 	}

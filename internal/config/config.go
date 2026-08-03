@@ -471,7 +471,7 @@ func (s Source) AsTool() Tool {
 		ImageChecksum: s.ImageChecksum,
 		// From the overlay, not the manifest: whether a machine that runs setup
 		// is the machine that uses it is a deployment fact.
-		CacheSetup: s.locations.CacheSetupEnabled(),
+		ToolCache: s.locations.ToolCacheRoot(),
 	}
 }
 
@@ -721,15 +721,18 @@ type Tool struct {
 	// ref produces different bytes on every pull, so a checksum there would fail
 	// for everyone including the person who wrote it.
 	ImageChecksum string `toml:"image_checksum,omitempty"`
-	// CacheSetup publishes the tool's data directory to the object store after
-	// setup succeeds, and restores it on a machine that has none.
+	// ToolCache is where this tool's installed data is archived so another
+	// machine can unpack it rather than repeating the install — an object-store
+	// locator. Empty means it is not archived at all.
 	//
-	// Opt-in rather than automatic, for two reasons. Setup output can be very
-	// large, so copying it is a real cost a source author should choose. And it
-	// can be licensed: a tool may install data that this deployment may use but
-	// not redistribute, and copying that into a shared bucket is not a decision
-	// to make on someone's behalf.
-	CacheSetup  bool   `toml:"cache_setup,omitempty"`
+	// Set from the source's locations overlay, not the manifest: whether the
+	// machine that runs setup is the machine that later uses it depends on how
+	// something is deployed, and a manifest shared through a registry would be
+	// asserting it for every consumer.
+	//
+	// One field rather than a flag plus a destination, so there is no way to be
+	// switched on with nowhere to write.
+	ToolCache   string `toml:"-"`
 	Engine      string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
 	Output      string `toml:"output,omitempty"`       // output filename the last step writes (default name.<format>.gz)
 	Format      string `toml:"format,omitempty"`       // vcf | tab — how the output is consumed

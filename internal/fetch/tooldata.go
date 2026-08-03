@@ -25,14 +25,20 @@ import (
 // it on any machine that has none. Nothing here knows what tool it is handling;
 // a source opts in with cache_setup and gets it.
 
-// toolDataObject is where a tool's archived data lives, or "" when the cache is
-// local and the directory is already shared or already there.
+// toolDataObject is where a tool's archived data lives, or "" when it is not
+// archived at all.
+//
+// The destination is named explicitly rather than inherited from cache_dir, so
+// a deployment can archive tool data to one bucket while its source files live
+// in another — and so "archive this" and "archive it here" cannot disagree.
 func toolDataObject(cfg *config.Config, t config.Tool) string {
-	cd := cfg.CacheDirAbs()
-	if !objstore.IsObject(cd) {
+	root := t.ToolCache
+	if root == "" || !objstore.IsObject(root) {
+		// A filesystem destination needs no archive: the directory is already
+		// where another machine reading that path would look.
 		return ""
 	}
-	return objstore.Join(cd, "tooldata", t.Name, t.Version+".tar.gz")
+	return objstore.Join(root, "tooldata", t.Name, t.Version+".tar.gz")
 }
 
 // publishToolData archives a tool's data dir and uploads it.

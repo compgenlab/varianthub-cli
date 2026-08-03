@@ -42,18 +42,19 @@ type Locations struct {
 
 	Files []FileLocation `toml:"file"`
 
-	// CacheSetup publishes a tool's data directory to the object store after
-	// setup, and restores it on a machine that has none.
+	// ToolCache is where a tool's installed data is archived so another machine
+	// can unpack it instead of repeating the install, e.g. "s3://bucket/prefix".
+	//
+	// One field rather than a flag plus a hidden destination: an empty value
+	// means off, and there is no way to be switched on with nowhere to write.
+	// It can also name a different bucket from the one holding source data,
+	// which a flag inheriting cache_dir could not express.
 	//
 	// A deployment fact, not a source one, which is why it lives here rather
 	// than in the manifest. Whether the machine that runs a tool's setup is the
-	// machine that later uses it depends on how something is deployed —
-	// containers with ephemeral disks need this, a fixed install does not — and
-	// a manifest shared through a registry would be asserting it for everyone.
-	//
-	// Nothing in the CLI's own use sets it: a cache_dir on a filesystem already
-	// holds the data where every machine reading that path can see it.
-	CacheSetup bool `toml:"cache_setup,omitempty"`
+	// machine that later uses it depends on how something is deployed, and a
+	// manifest shared through a registry would be asserting it for everyone.
+	ToolCache string `toml:"tool_cache,omitempty"`
 
 	// AnnotationPrefix renames this source's output fields for this deployment,
 	// without a snapshot having to say so.
@@ -121,8 +122,14 @@ func (l *Locations) AnnotationPrefixOverride() string {
 	return l.AnnotationPrefix
 }
 
-// CacheSetupEnabled reports whether this source's tool data should be published.
-func (l *Locations) CacheSetupEnabled() bool { return l != nil && l.CacheSetup }
+// ToolCacheRoot is where this source's installed tool data should be archived,
+// or "" when it should not be.
+func (l *Locations) ToolCacheRoot() string {
+	if l == nil {
+		return ""
+	}
+	return l.ToolCache
+}
 
 // Empty reports whether the overlay records nothing, in which case resolution
 // falls back to the cache_dir convention.

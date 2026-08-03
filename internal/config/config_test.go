@@ -1027,7 +1027,7 @@ func TestToolImageObject(t *testing.T) {
 
 // cache_setup is a deployment fact, so it comes from the overlay beside a
 // source rather than from the manifest a registry shares.
-func TestCacheSetupComesFromTheOverlay(t *testing.T) {
+func TestToolCacheComesFromTheOverlay(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	sdir := filepath.Join(home, "annotations", "sources", "vep", "113")
@@ -1086,14 +1086,15 @@ default_snapshot = "s"
 
 	// A manifest alone says nothing about it — the default for every consumer
 	// of a shared source.
-	if load().CacheSetup {
-		t.Error("cache_setup is on with no overlay")
+	if got := load().ToolCache; got != "" {
+		t.Errorf("ToolCache = %q with no overlay", got)
 	}
 
-	// The deployment turns it on beside the source it applies to.
-	write("vep-113.locations.toml", "cache_setup = true\n")
-	if !load().CacheSetup {
-		t.Error("the overlay did not enable cache_setup")
+	// The deployment turns it on by naming where the archive goes — one field,
+	// so there is no way to be enabled with nowhere to write.
+	write("vep-113.locations.toml", "tool_cache = \"s3://vh-tools/prod\"\n")
+	if got := load().ToolCache; got != "s3://vh-tools/prod" {
+		t.Errorf("ToolCache = %q, want the overlay's locator", got)
 	}
 
 	// A manifest cannot set it: the key is not part of the source schema, and a
@@ -1105,23 +1106,18 @@ name        = "vep"
 version     = "113"
 image       = "docker://example/vep:1"
 format      = "vcf"
-cache_setup = true
+tool_cache  = "s3://vh-tools/prod"
 
   [[sources.steps]]
   name = "run"
   run  = "true"
 `)
-	if _, err := Load(filepath.Join(home, "config.toml")); err == nil {
-		if _, sErr := (&Config{}).LoadSnapshot("s"); sErr == nil {
-			t.Skip("config loaded; snapshot check is what matters")
-		}
-	}
 	c, err := Load(filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.LoadSnapshot("s"); err == nil {
-		t.Error("a manifest declaring cache_setup was accepted")
+		t.Error("a manifest declaring tool_cache was accepted")
 	}
 }
 

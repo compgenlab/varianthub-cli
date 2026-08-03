@@ -517,7 +517,7 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 		// A machine with no data of its own, when someone has already done this
 		// work and published it. Unpacking a tarball is minutes where running
 		// setup can be hours.
-		case !force && t.CacheSetup && restoreToolData(ctx, cfg, t, datadir, logf):
+		case !force && t.ToolCache != "" && restoreToolData(ctx, cfg, t, datadir, logf):
 			if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
 				return res, err
 			}
@@ -539,7 +539,7 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 			if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
 				return res, err
 			}
-			if t.CacheSetup {
+			if t.ToolCache != "" {
 				publishToolData(ctx, cfg, t, datadir, logf)
 			}
 			res.Index = "setup: done"

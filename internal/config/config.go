@@ -155,6 +155,22 @@ type SnapshotConfig struct {
 	Assembly    string   `toml:"assembly,omitempty"`
 	Sources     []string `toml:"sources,omitempty"`             // "name:version" refs (incl. tool sources)
 	Defaults    []string `toml:"default_annotations,omitempty"` // annotation names
+
+	// Prefixes overrides a source's annotation prefix, keyed by the same
+	// "name:version" ref the sources list uses:
+	//
+	//   [annotation_prefixes]
+	//     "gencode:48" = "GENCODE_48_"
+	//     "gencode:49" = "GENCODE_49_"
+	//
+	// A snapshot is where two versions of one source actually meet, so it is
+	// where the disambiguation belongs — the source manifest cannot know what
+	// else a snapshot pins, and the locations overlay is about where data sits
+	// rather than what the output is called.
+	//
+	// The value "-" means no prefix, which an empty string cannot express: an
+	// absent entry has to fall through to the manifest's own default.
+	Prefixes map[string]string `toml:"annotation_prefixes,omitempty"`
 }
 
 // SourceByName finds a source by its name.
@@ -271,12 +287,24 @@ type Source struct {
 	// entry with type = "tool", and the fragment decoder rejects a key this
 	// struct does not know.
 	ImageChecksum string `toml:"image_checksum,omitempty"`
-	Engine        string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
-	InputFormat   string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
-	Output        string `toml:"output,omitempty"`       // output filename the last step writes
-	Setup         []Step `toml:"setup,omitempty"`        // one-time install into {datadir}
-	Threads       int    `toml:"threads,omitempty"`      // per-run CPU count → {threads} (e.g. vep --fork)
-	Steps         []Step `toml:"steps,omitempty"`        // per-run steps producing Output
+
+	// AnnotationPrefix is prepended to every annotation name this source
+	// contributes, so a manifest names a field once — GENE — and the qualified
+	// output key is GENCODE_48_GENE.
+	//
+	// The manifest's value is the default. A deployment overrides it in the
+	// source's locations overlay, which is what lets two versions of the same
+	// source sit in one snapshot without their outputs colliding: annotations
+	// are collected into a flat list with no collision check, so identically
+	// named fields from two sources would both be written and one would win
+	// silently.
+	AnnotationPrefix string `toml:"annotation_prefix,omitempty"`
+	Engine           string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
+	InputFormat      string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
+	Output           string `toml:"output,omitempty"`       // output filename the last step writes
+	Setup            []Step `toml:"setup,omitempty"`        // one-time install into {datadir}
+	Threads          int    `toml:"threads,omitempty"`      // per-run CPU count → {threads} (e.g. vep --fork)
+	Steps            []Step `toml:"steps,omitempty"`        // per-run steps producing Output
 	// Assets are helper files co-located with the fragment that Steps need (staged
 	// into the step workdir, referenced as {workdir}/<name>). Tool sources use this;
 	// build sources use build.assets.
@@ -295,6 +323,10 @@ type Source struct {
 	// locations is the overlay recording where this source's data was actually
 	// provisioned. Attached at load time; not part of the manifest.
 	locations *Locations
+	// prefixOverride is the snapshot's annotation prefix for this source, set
+	// while the snapshot is loaded. Not serialized: it belongs to the snapshot
+	// that pinned this source, not to the source.
+	prefixOverride string `toml:"-"`
 }
 
 // DisplayTitle is the source's human-readable name (Title), falling back to its
@@ -919,6 +951,20 @@ func (snap *Snapshot) normalize() {
 	}
 	for si := range snap.Sources {
 		s := &snap.Sources[si]
+		// Qualify this source's field names once, in place, so every reader —
+		// the flat list below, the overlay annotators, the cache keys — sees the
+		// same name. Applied here rather than at each use because a name that
+		// differs between two readers is a bug nobody would find quickly.
+		if prefix := s.EffectiveAnnotationPrefix(); prefix != "" {
+			for ai := range s.Annotations {
+				a := &s.Annotations[ai]
+				// Field is what to read from the source and is untouched: the
+				// prefix names the output, not the input.
+				if a.Name != "" && !strings.HasPrefix(a.Name, prefix) {
+					a.Name = prefix + a.Name
+				}
+			}
+		}
 		for ai := range s.Annotations {
 			a := &s.Annotations[ai]
 			if s.IsBuiltinSource() {
@@ -935,6 +981,30 @@ func (snap *Snapshot) normalize() {
 			}
 		}
 	}
+}
+
+// EffectiveAnnotationPrefix is the prefix actually applied, most specific first:
+//
+//	the snapshot that pinned this source  — "in this bundle, call it GENCODE_48_"
+//	the deployment's overlay              — "this catalog always calls it that"
+//	the manifest's own default            — what the source author suggested
+//
+// Each level knows something the one below it cannot: a manifest travels through
+// a registry and cannot know what else is installed; an overlay is one catalog's
+// standing answer; a snapshot is where two versions of a source actually meet.
+//
+// "-" means deliberately no prefix at any level, which an empty string cannot
+// express — unset has to fall through rather than clear.
+func (s Source) EffectiveAnnotationPrefix() string {
+	for _, p := range []string{s.prefixOverride, s.locations.AnnotationPrefixOverride()} {
+		if p == "-" {
+			return ""
+		}
+		if p != "" {
+			return p
+		}
+	}
+	return s.AnnotationPrefix
 }
 
 // Normalize rebuilds the derived flat annotation list (exported for callers that
@@ -1225,6 +1295,14 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 		}
 		for i := range frag.Sources {
 			frag.Sources[i].locations = loc
+			// The snapshot's override, matched on the ref it was pinned by.
+			if p, ok := mc.Prefixes[ref]; ok {
+				frag.Sources[i].prefixOverride = p
+			} else if p, ok := mc.Prefixes[n+":"+v]; ok {
+				// The ref may have been written without a version ("gencode"),
+				// so a keyed override still has to find it.
+				frag.Sources[i].prefixOverride = p
+			}
 		}
 		snap.Sources = append(snap.Sources, frag.Sources...)
 	}

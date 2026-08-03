@@ -55,6 +55,15 @@ type Locations struct {
 	// holds the data where every machine reading that path can see it.
 	CacheSetup bool `toml:"cache_setup,omitempty"`
 
+	// AnnotationPrefix renames this source's output fields for this deployment,
+	// without a snapshot having to say so.
+	//
+	// A catalog may hold two versions of one source and want them permanently
+	// distinguishable, whatever pins them — so this is the deployment's standing
+	// answer, and a snapshot that needs something different overrides it. Set to
+	// "-" for no prefix, since an empty string means "not set".
+	AnnotationPrefix string `toml:"annotation_prefix,omitempty"`
+
 	path string // where it was loaded from, for writing back
 }
 
@@ -101,6 +110,15 @@ func (c *Config) LoadLocations(name, version string) (*Locations, error) {
 		}
 	}
 	return l, nil
+}
+
+// AnnotationPrefixOverride returns this deployment's prefix for the source, or
+// "" when it has not set one.
+func (l *Locations) AnnotationPrefixOverride() string {
+	if l == nil {
+		return ""
+	}
+	return l.AnnotationPrefix
 }
 
 // CacheSetupEnabled reports whether this source's tool data should be published.

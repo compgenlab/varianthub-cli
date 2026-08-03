@@ -312,3 +312,40 @@ keep it, at roughly double the space.
 Pruning is refused unless the converted file *and* its index are both present, and
 never touches a source that shipped pre-indexed — there the original **is** the
 queried file.
+
+## Naming a source's output fields
+
+A source's annotations are written to the output under a qualified name, so two
+versions of the same source can sit in one snapshot without colliding. Nothing
+checks for a collision — identically named fields from two sources are both
+written and one wins silently — so the prefix is what keeps them apart.
+
+The manifest names a field once and declares the default prefix:
+
+```toml
+[[sources]]
+name              = "gencode"
+version           = "48"
+annotation_prefix = "GENCODE_48_"
+
+  [[sources.annotations]]
+  name = "GENE"          # written as GENCODE_48_GENE
+```
+
+Three levels can set it, most specific first:
+
+| Level | Says | Where |
+| --- | --- | --- |
+| Snapshot | "in this bundle, call it this" | `[annotation_prefixes]` in the snapshot manifest, keyed by `name:version` |
+| Deployment | "this catalog always calls it this" | `annotation_prefix` in the source's locations overlay |
+| Source | what the author suggested | `annotation_prefix` in the manifest |
+
+Each knows something the one below it cannot. A manifest travels through a
+registry and cannot know what else a deployment has installed. An overlay is one
+catalog's standing answer. A snapshot is where two versions actually meet.
+
+Setting any level to `"-"` means no prefix at all — an empty string cannot say
+that, because unset has to fall through rather than clear.
+
+Only the output name is prefixed. `field` — what to read from the source file —
+is untouched, since the prefix names what comes out, not what goes in.

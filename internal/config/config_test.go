@@ -1189,3 +1189,119 @@ url      = "https://example.org/clinvar.vcf.gz"
 		t.Errorf("with an overlay, resolved to %q; want it under the recorded root", got)
 	}
 }
+
+// Two versions of the same source in one snapshot must produce distinct output
+// names. Annotations are collected into a flat list with no collision check, so
+// identically named fields would both be written and one would win silently.
+func TestAnnotationPrefix(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	snapDir := filepath.Join(home, "annotations", "snapshots")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := func(name, version, prefix string) string {
+		d := filepath.Join(home, "annotations", "sources", name, version)
+		write(filepath.Join(d, name+"-"+version+".toml"), `[[sources]]
+name     = "`+name+`"
+version  = "`+version+`"
+format   = "vcf"
+assembly = "GRCh38"
+url      = "https://example.org/x.vcf.gz"
+annotation_prefix = "`+prefix+`"
+
+  [[sources.annotations]]
+  name = "GENE"
+  type = "text"
+`)
+		return d
+	}
+	d48 := src("gencode", "48", "GENCODE_48_")
+	d49 := src("gencode", "49", "GENCODE_49_")
+
+	write(filepath.Join(home, "config.toml"), `
+data_dir         = "`+dir+`/data"
+cache_dir        = "`+dir+`/cache"
+annotations_dir  = "`+filepath.Join(home, "annotations")+`"
+default_snapshot = "s"
+`)
+	write(filepath.Join(snapDir, "s.toml"),
+		"assembly = \"GRCh38\"\nsources = [\"gencode:48\", \"gencode:49\"]\n")
+
+	names := func() []string {
+		t.Helper()
+		c, err := Load(filepath.Join(home, "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := c.LoadSnapshot("s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, a := range snap.Annotations {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+
+	// The manifest's own prefixes keep the two apart.
+	got := names()
+	if len(got) != 2 || got[0] != "GENCODE_48_GENE" || got[1] != "GENCODE_49_GENE" {
+		t.Fatalf("names = %v", got)
+	}
+
+	// A deployment renames one without touching its manifest: the catalog's
+	// standing answer for that source.
+	write(filepath.Join(d49, "gencode-49.locations.toml"),
+		"annotation_prefix = \"GENCODE_LATEST_\"\n")
+	got = names()
+	if got[1] != "GENCODE_LATEST_GENE" {
+		t.Errorf("with an overlay, names = %v", got)
+	}
+	// ...and the other is untouched, which is the point of a per-source overlay.
+	if got[0] != "GENCODE_48_GENE" {
+		t.Errorf("the overlay leaked to the other version: %v", got)
+	}
+
+	// A snapshot wins over the overlay, because it is where the two versions
+	// actually meet and it knows what else it pinned.
+	write(filepath.Join(snapDir, "s.toml"), `assembly = "GRCh38"
+sources = ["gencode:48", "gencode:49"]
+
+  [annotation_prefixes]
+    "gencode:49" = "GENCODE_NEW_"
+`)
+	got = names()
+	if got[1] != "GENCODE_NEW_GENE" {
+		t.Errorf("the snapshot did not override the overlay: %v", got)
+	}
+	if got[0] != "GENCODE_48_GENE" {
+		t.Errorf("the snapshot override leaked to the other source: %v", got)
+	}
+
+	// "-" means deliberately none, which an empty string cannot express: unset
+	// has to fall through to the level below.
+	write(filepath.Join(d48, "gencode-48.locations.toml"), "annotation_prefix = \"-\"\n")
+	if got = names(); got[0] != "GENE" {
+		t.Errorf(`with "-", names = %v`, got)
+	}
+}
+
+// A manifest with no prefix behaves as it always did, so nothing already
+// registered changes name.
+func TestAnnotationPrefixIsOptional(t *testing.T) {
+	s := Source{Annotations: []Annotation{{Name: "CLINVAR_SIG"}}}
+	if got := s.EffectiveAnnotationPrefix(); got != "" {
+		t.Errorf("EffectiveAnnotationPrefix = %q, want empty", got)
+	}
+}

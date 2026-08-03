@@ -272,6 +272,13 @@ func buildSource(ctx context.Context, cfg *config.Config, src config.Source, for
 	if err := software.Check(src.ID(), src.Requires); err != nil {
 		return Result{}, err
 	}
+	if src.Build != nil {
+		// Before any input is fetched: a REVEL build downloads 175 files before
+		// its first step would have discovered a missing converter.
+		if err := checkAssets(cfg, src.ID(), src.Name, src.Version, src.Build.Assets); err != nil {
+			return Result{}, err
+		}
+	}
 
 	logf("%s: building source", src.ID())
 	work, err := os.MkdirTemp("", "varhub-build-")
@@ -425,6 +432,11 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 	res := Result{Source: t.ID() + " (tool)", Data: "-", Index: "-"}
 
 	if err := software.Check(t.ID(), t.RequiredSoftware()); err != nil {
+		return res, err
+	}
+	// Before the image is pulled: a missing 2 KB script should not cost a 1.5 GB
+	// download to discover.
+	if err := checkAssets(cfg, t.ID(), src.Name, src.Version, t.Assets); err != nil {
 		return res, err
 	}
 

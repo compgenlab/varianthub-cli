@@ -288,16 +288,20 @@ type Source struct {
 	// struct does not know.
 	ImageChecksum string `toml:"image_checksum,omitempty"`
 
-	// AnnotationPrefix is prepended to every annotation name this source
-	// contributes, so a manifest names a field once — GENE — and the qualified
-	// output key is GENCODE_48_GENE.
+	// AnnotationPrefix declares the prefix this source's annotation names
+	// already carry — VEP names every field VEP_Allele, VEP_Consequence, so it
+	// declares "VEP_".
 	//
-	// The manifest's value is the default. A deployment overrides it in the
-	// source's locations overlay, which is what lets two versions of the same
-	// source sit in one snapshot without their outputs colliding: annotations
-	// are collected into a flat list with no collision check, so identically
-	// named fields from two sources would both be written and one would win
-	// silently.
+	// Declaring it is what makes renaming possible: an override replaces this
+	// prefix rather than stacking on top of it, so "VEP_113_" yields
+	// VEP_113_Allele and not VEP_113_VEP_Allele. One line per manifest, versus
+	// spelling out `field` on every annotation so the names could be written
+	// bare.
+	//
+	// Overridden per deployment or per snapshot. That is what lets two versions
+	// of one source share a snapshot: annotations are collected into a flat list
+	// with no collision check, so identically named fields from two sources are
+	// both written and one wins silently.
 	AnnotationPrefix string `toml:"annotation_prefix,omitempty"`
 	Engine           string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
 	InputFormat      string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
@@ -951,20 +955,11 @@ func (snap *Snapshot) normalize() {
 	}
 	for si := range snap.Sources {
 		s := &snap.Sources[si]
-		// Qualify this source's field names once, in place, so every reader —
+		// Re-prefix this source's output names once, in place, so every reader —
 		// the flat list below, the overlay annotators, the cache keys — sees the
-		// same name. Applied here rather than at each use because a name that
-		// differs between two readers is a bug nobody would find quickly.
-		if prefix := s.EffectiveAnnotationPrefix(); prefix != "" {
-			for ai := range s.Annotations {
-				a := &s.Annotations[ai]
-				// Field is what to read from the source and is untouched: the
-				// prefix names the output, not the input.
-				if a.Name != "" && !strings.HasPrefix(a.Name, prefix) {
-					a.Name = prefix + a.Name
-				}
-			}
-		}
+		// same name. A name that differs between two readers is a bug nobody
+		// would find quickly.
+		s.applyAnnotationPrefix()
 		for ai := range s.Annotations {
 			a := &s.Annotations[ai]
 			if s.IsBuiltinSource() {
@@ -979,6 +974,43 @@ func (snap *Snapshot) normalize() {
 			} else {
 				add(*a, s.Name) // data and tool sources alike
 			}
+		}
+	}
+}
+
+// applyAnnotationPrefix rewrites this source's output names to the effective
+// prefix, leaving what is read from the source alone.
+//
+// A manifest declares the prefix its names already carry — VEP names every
+// field VEP_Allele, VEP_Consequence — so swapping it for VEP_113_ is a
+// substitution rather than a prepend. Declaring it costs the manifest one line;
+// the alternative was spelling out `field` on all forty-odd annotations so the
+// names could be written bare.
+//
+// Field is pinned first, because FieldName() falls back to Name lazily: rename
+// Name without doing that and the annotator starts looking for VEP_113_Allele in
+// a file that contains VEP_Allele, which fails as "no values" rather than as
+// anything to do with naming.
+func (s *Source) applyAnnotationPrefix() {
+	declared, effective := s.AnnotationPrefix, s.EffectiveAnnotationPrefix()
+	if declared == effective {
+		return // nothing overrode it
+	}
+	for i := range s.Annotations {
+		a := &s.Annotations[i]
+		if a.Name == "" {
+			continue
+		}
+		if a.Field == "" {
+			a.Field = a.Name // what the source actually writes, before renaming
+		}
+		switch {
+		case declared != "" && strings.HasPrefix(a.Name, declared):
+			a.Name = effective + strings.TrimPrefix(a.Name, declared)
+		case effective != "" && !strings.HasPrefix(a.Name, effective):
+			// The manifest declared no prefix, so there is nothing to replace
+			// and the new one is simply added.
+			a.Name = effective + a.Name
 		}
 	}
 }

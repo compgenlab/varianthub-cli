@@ -1220,7 +1220,7 @@ url      = "https://example.org/x.vcf.gz"
 annotation_prefix = "`+prefix+`"
 
   [[sources.annotations]]
-  name = "GENE"
+  name = "`+prefix+`GENE"
   type = "text"
 `)
 		return d
@@ -1303,5 +1303,104 @@ func TestAnnotationPrefixIsOptional(t *testing.T) {
 	s := Source{Annotations: []Annotation{{Name: "CLINVAR_SIG"}}}
 	if got := s.EffectiveAnnotationPrefix(); got != "" {
 		t.Errorf("EffectiveAnnotationPrefix = %q, want empty", got)
+	}
+}
+
+// VEP's case: the manifest's names already carry a prefix, and it is also what
+// VEP writes into its output VCF. Renaming the output must not change what is
+// read, or the annotator looks for a field the file does not contain and reports
+// no values rather than anything about naming.
+func TestAnnotationPrefixSubstitution(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sdir := filepath.Join(home, "annotations", "sources", "vep", "113")
+	snapDir := filepath.Join(home, "annotations", "snapshots")
+	for _, d := range []string{sdir, snapDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(home, "config.toml"), `
+data_dir         = "`+dir+`/data"
+cache_dir        = "`+dir+`/cache"
+annotations_dir  = "`+filepath.Join(home, "annotations")+`"
+default_snapshot = "s"
+`)
+	write(filepath.Join(snapDir, "s.toml"), "assembly = \"GRCh38\"\nsources = [\"vep:113\"]\n")
+	// Names as VEP actually writes them, plus the one line that declares it.
+	write(filepath.Join(sdir, "vep-113.toml"), `[[sources]]
+type              = "tool"
+name              = "vep"
+version           = "113"
+assembly          = "GRCh38"
+format            = "vcf"
+image             = "docker://example/vep:113"
+annotation_prefix = "VEP_"
+
+  [[sources.steps]]
+  name = "run"
+  run  = "true"
+
+  [[sources.annotations]]
+  name = "VEP_Consequence"
+  type = "text"
+
+  [[sources.annotations]]
+  name = "VEP_SYMBOL"
+  type = "text"
+`)
+
+	load := func() []Annotation {
+		t.Helper()
+		c, err := Load(filepath.Join(home, "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := c.LoadSnapshot("s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap.Annotations
+	}
+
+	// Nothing overridden: names are exactly what the manifest says.
+	got := load()
+	if got[0].Name != "VEP_Consequence" || got[0].FieldName() != "VEP_Consequence" {
+		t.Fatalf("unmodified: name=%q field=%q", got[0].Name, got[0].FieldName())
+	}
+
+	// Swap the prefix. The output is renamed; the field VEP writes is not.
+	write(filepath.Join(sdir, "vep-113.locations.toml"), "annotation_prefix = \"VEP_113_\"\n")
+	got = load()
+	for i, want := range []struct{ name, field string }{
+		{"VEP_113_Consequence", "VEP_Consequence"},
+		{"VEP_113_SYMBOL", "VEP_SYMBOL"},
+	} {
+		if got[i].Name != want.name {
+			t.Errorf("name = %q, want %q", got[i].Name, want.name)
+		}
+		// The whole point: reading is unaffected.
+		if got[i].FieldName() != want.field {
+			t.Errorf("field = %q, want %q — renaming changed what is read",
+				got[i].FieldName(), want.field)
+		}
+	}
+
+	// Not stacked: VEP_113_VEP_Consequence would be the naive result.
+	if strings.Contains(got[0].Name, "VEP_VEP") || strings.Count(got[0].Name, "VEP_") > 1 {
+		t.Errorf("prefix stacked instead of replacing: %q", got[0].Name)
+	}
+
+	// "-" strips it entirely, leaving the bare field name.
+	write(filepath.Join(sdir, "vep-113.locations.toml"), "annotation_prefix = \"-\"\n")
+	got = load()
+	if got[0].Name != "Consequence" || got[0].FieldName() != "VEP_Consequence" {
+		t.Errorf(`with "-": name=%q field=%q`, got[0].Name, got[0].FieldName())
 	}
 }

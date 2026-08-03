@@ -473,7 +473,17 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 			res.Data = "pulled"
 		default:
 			logf("%s: downloading image %s", t.ID(), t.Image)
-			if err := download(ctx, t.Image, img, ""); err != nil {
+			// A prebuilt image may live in an object store as readily as on a
+			// web server; both are just places a file comes from.
+			if objstore.IsObject(t.Image) {
+				if err := fetchObject(ctx, t.Image, img); err != nil {
+					return res, fmt.Errorf("%s image: %w", t.ID(), err)
+				}
+				if err := checksum.Verify(img, t.ImageChecksum); err != nil {
+					os.Remove(img)
+					return res, fmt.Errorf("%s image: %w", t.ID(), err)
+				}
+			} else if err := download(ctx, t.Image, img, t.ImageChecksum); err != nil {
 				return res, fmt.Errorf("%s image: %w", t.ID(), err)
 			}
 			if obj != "" {
@@ -489,9 +499,18 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 	if len(t.Setup) > 0 {
 		datadir := cfg.ResolveToolData(t)
 		sentinel := filepath.Join(datadir, ".varhub-setup-done")
-		if fileExists(sentinel) && !force {
+		switch {
+		case fileExists(sentinel) && !force:
 			res.Index = "setup: skipped"
-		} else {
+		// A machine with no data of its own, when someone has already done this
+		// work and published it. Unpacking a tarball is minutes where running
+		// setup can be hours.
+		case !force && t.CacheSetup && restoreToolData(ctx, cfg, t, datadir, logf):
+			if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+				return res, err
+			}
+			res.Index = "setup: restored"
+		default:
 			if err := os.MkdirAll(datadir, 0o755); err != nil {
 				return res, err
 			}
@@ -507,6 +526,9 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 			}
 			if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
 				return res, err
+			}
+			if t.CacheSetup {
+				publishToolData(ctx, cfg, t, datadir, logf)
 			}
 			res.Index = "setup: done"
 		}

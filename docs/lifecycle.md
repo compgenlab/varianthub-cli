@@ -151,6 +151,42 @@ directory (a relative asset ships next to the source in the registry).
 
 ## Tool acquisition (image + one-time setup)
 
+Three manifest fields govern how a tool travels between machines. None of them
+know what tool they are describing:
+
+```toml
+[[sources]]
+type          = "tool"
+name          = "vep"
+version       = "115"
+image         = "docker://ensemblorg/ensembl-vep@sha256:…"   # or s3://…/vep.sif
+image_checksum = "sha256:…"    # prebuilt images only — see below
+cache_setup   = true           # publish the setup output for other machines
+```
+
+- **`image`** takes a registry ref to pull, or a prebuilt `.sif` to fetch over
+  http(s) **or from an object store** (`s3://bucket/key.sif`).
+- **`image_checksum`** verifies a fetched prebuilt image. It is meaningless for a
+  `docker://` ref: converting one produces different bytes on every pull —
+  apptainer inserts its own configuration — so a checksum there would fail for
+  everyone, including whoever wrote it. To pin what a `docker://` ref resolves
+  to, name a **digest** (`repo@sha256:…`) rather than a tag; a tag can be
+  re-pushed.
+- **`cache_setup`** archives the tool's data dir to the object store once setup
+  succeeds, and restores it on a machine that has none. Setup that takes hours
+  becomes a tarball fetch.
+
+Opt-in rather than automatic, for two reasons that have nothing to do with
+performance. Setup output can be very large, so copying it is a real cost the
+source author should choose. And it can be **licensed** — a tool may install
+data this deployment may use but not redistribute, and copying that into a
+shared bucket is not a decision to make on someone's behalf.
+
+Whatever the cache holds, tool images and tool data are always *materialized
+locally*: a container binds `{datadir}`, and apptainer runs a `.sif` from a
+path. An object store can hold the durable copy and never serve either directly.
+
+
 `varhub download` acquires a tool source's container image and runs its one-time setup:
 
 1. **Image** — `image` is a registry ref (`docker://`, `oras://`, `shub://`) that is

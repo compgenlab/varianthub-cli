@@ -266,13 +266,18 @@ type Source struct {
 	// {input}: "vcf" (default) or a per-variant line template (placeholders {chrom}
 	// {pos} {pos0} {ref} {alt} {end}). Output is consumed like a data source of Format
 	// (vcf|tab). Setup runs once (image acquire time); Steps run per annotate.
-	Image       string `toml:"image,omitempty"`
-	Engine      string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
-	InputFormat string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
-	Output      string `toml:"output,omitempty"`       // output filename the last step writes
-	Setup       []Step `toml:"setup,omitempty"`        // one-time install into {datadir}
-	Threads     int    `toml:"threads,omitempty"`      // per-run CPU count → {threads} (e.g. vep --fork)
-	Steps       []Step `toml:"steps,omitempty"`        // per-run steps producing Output
+	Image string `toml:"image,omitempty"`
+	// See Tool.ImageChecksum and Tool.CacheSetup — declared here because a tool
+	// is a [[sources]] entry with type = "tool", and the fragment decoder
+	// rejects a key this struct does not know.
+	ImageChecksum string `toml:"image_checksum,omitempty"`
+	CacheSetup    bool   `toml:"cache_setup,omitempty"`
+	Engine        string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
+	InputFormat   string `toml:"input_format,omitempty"` // "vcf" (default) | per-variant line template
+	Output        string `toml:"output,omitempty"`       // output filename the last step writes
+	Setup         []Step `toml:"setup,omitempty"`        // one-time install into {datadir}
+	Threads       int    `toml:"threads,omitempty"`      // per-run CPU count → {threads} (e.g. vep --fork)
+	Steps         []Step `toml:"steps,omitempty"`        // per-run steps producing Output
 	// Assets are helper files co-located with the fragment that Steps need (staged
 	// into the step workdir, referenced as {workdir}/<name>). Tool sources use this;
 	// build sources use build.assets.
@@ -428,6 +433,7 @@ func (s Source) AsTool() Tool {
 		InputFormat: s.InputFormat, RefCol: s.RefCol, AltCol: s.AltCol,
 		Setup: s.Setup, Threads: s.Threads, Steps: s.Steps,
 		Requires: s.Requires, Assets: s.Assets, Annotations: s.Annotations,
+		ImageChecksum: s.ImageChecksum, CacheSetup: s.CacheSetup,
 	}
 }
 
@@ -661,9 +667,31 @@ func (s Source) DataSource() model.DataSource {
 type Tool struct {
 	Name    string `toml:"name"`
 	Version string `toml:"version"`
-	// Image is the container: a registry ref (docker://, oras://, shub://) that is
-	// pulled, or a .sif URL that is downloaded. Cached by name/version.
-	Image       string `toml:"image,omitempty"`
+	// Image is the container: a registry ref (docker://, oras://, shub://) that
+	// is pulled and converted, or a prebuilt .sif to download — over http(s), or
+	// from an object store as s3://bucket/key. Cached by name/version.
+	//
+	// A docker:// ref may name a digest (repo@sha256:…) instead of a tag, which
+	// is the only way to pin what gets pulled: a tag can be re-pushed. The
+	// converted SIF's bytes are not reproducible either way — apptainer inserts
+	// its own configuration per pull — so ImageChecksum applies to a prebuilt
+	// image only.
+	Image string `toml:"image,omitempty"`
+	// ImageChecksum verifies a downloaded prebuilt image, as "<algo>:<hex>".
+	//
+	// Only meaningful for a .sif that is fetched whole. Converting a docker://
+	// ref produces different bytes on every pull, so a checksum there would fail
+	// for everyone including the person who wrote it.
+	ImageChecksum string `toml:"image_checksum,omitempty"`
+	// CacheSetup publishes the tool's data directory to the object store after
+	// setup succeeds, and restores it on a machine that has none.
+	//
+	// Opt-in rather than automatic, for two reasons. Setup output can be very
+	// large, so copying it is a real cost a source author should choose. And it
+	// can be licensed: a tool may install data that this deployment may use but
+	// not redistribute, and copying that into a shared bucket is not a decision
+	// to make on someone's behalf.
+	CacheSetup  bool   `toml:"cache_setup,omitempty"`
 	Engine      string `toml:"engine,omitempty"`       // container exec program; default "apptainer"
 	Output      string `toml:"output,omitempty"`       // output filename the last step writes (default name.<format>.gz)
 	Format      string `toml:"format,omitempty"`       // vcf | tab — how the output is consumed

@@ -954,3 +954,44 @@ func TestPerAltValidation(t *testing.T) {
 		t.Errorf("valid per-alt bigwig should pass: %v", err)
 	}
 }
+
+// A container binds {datadir} and apptainer runs a .sif from a real path, so
+// neither can be composed from an object-store cache. Before this, an s3
+// cache_dir produced "s3:/bucket/..." — filepath.Join collapses the scheme —
+// which is neither a locator nor a path.
+func TestToolPathsStayLocal(t *testing.T) {
+	vep := Tool{Name: "vep", Version: "115", Image: "docker://ensemblorg/ensembl-vep:release_115.0"}
+
+	t.Run("remote cache falls back to data_dir", func(t *testing.T) {
+		c := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "s3://vh-sources/prod"}
+		c.SetBaseDir("/etc/varhub")
+
+		data := c.ResolveToolData(vep)
+		if !filepath.IsAbs(data) || strings.Contains(data, "s3:") {
+			t.Errorf("ResolveToolData = %q; want a local absolute path", data)
+		}
+		if want := "/var/lib/varhub/data/tools/vep/115"; data != want {
+			t.Errorf("ResolveToolData = %q, want %q", data, want)
+		}
+		img := c.ResolveToolImage(vep)
+		if strings.Contains(img, "s3:") {
+			t.Errorf("ResolveToolImage = %q; want a local path", img)
+		}
+	})
+
+	t.Run("local cache is unchanged", func(t *testing.T) {
+		c := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "/mnt/sources"}
+		c.SetBaseDir("/etc/varhub")
+		if want, got := "/mnt/sources/tools/vep/115", c.ResolveToolData(vep); got != want {
+			t.Errorf("ResolveToolData = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("tool_dir wins", func(t *testing.T) {
+		c := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "s3://vh/prod", ToolDir: "/fast/tools"}
+		c.SetBaseDir("/etc/varhub")
+		if want, got := "/fast/tools/tools/vep/115", c.ResolveToolData(vep); got != want {
+			t.Errorf("ResolveToolData = %q, want %q", got, want)
+		}
+	})
+}

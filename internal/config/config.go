@@ -66,8 +66,13 @@ type Config struct {
 	// assembly-specific), set in the manifest. Reference FASTAs are keyed by
 	// assembly in `References`, so a snapshot's reference is looked up from its
 	// assembly (see ReferenceFor) rather than being pinned in the manifest.
-	DataDir         string               `toml:"data_dir"`
-	CacheDir        string               `toml:"cache_dir"`          // downloaded source files, cached by name/version
+	DataDir  string `toml:"data_dir"`
+	CacheDir string `toml:"cache_dir"` // downloaded source files, cached by name/version
+	// ToolDir holds container images and tool data. Always a filesystem path,
+	// never an object store: a container binds {datadir}, and apptainer runs a
+	// .sif from disk — neither can be handed a locator. Defaults to
+	// <cache_dir>/… when the cache is local, and to <data_dir>/… when it is not.
+	ToolDir         string               `toml:"tool_dir,omitempty"`
 	TempDir         string               `toml:"temp_dir,omitempty"` // base for scratch dirs (tool workdirs, fan-out parts); default: $TMPDIR or /tmp
 	DefaultSnapshot string               `toml:"default_snapshot"`
 	AnnotationsDir  string               `toml:"annotations_dir"`      // root holding sources/ tools/ snapshots/ (default "annotations")
@@ -1533,7 +1538,28 @@ func (c *Config) ResolveToolImage(t Tool) string {
 			base = b
 		}
 	}
-	return filepath.Join(c.CacheDirAbs(), "images", t.Name, t.Version, base)
+	return filepath.Join(c.toolBase(), "images", t.Name, t.Version, base)
+}
+
+// toolBase is the local directory holding tool images and tool data.
+//
+// Tools cannot live in an object store. A container binds its data dir and
+// apptainer runs a .sif from a real path, so composing either from an s3://
+// cache produced "s3:/bucket/..." — filepath.Join collapses the scheme — which
+// is neither a locator nor a path, and failed far from the cause.
+func (c *Config) toolBase() string {
+	if c.ToolDir != "" {
+		return c.resolveDir(c.ToolDir)
+	}
+	if cd := c.CacheDirAbs(); !objstore.IsRemote(cd) {
+		return cd
+	}
+	// The cache is remote, so fall back to local persistent storage. data_dir is
+	// what a deployment already sets aside for exactly this.
+	if c.DataDir != "" {
+		return c.DataDirAbs()
+	}
+	return "tools-local"
 }
 
 // ResolveToolData returns the tool's persistent data dir (<name>/<version>, matching
@@ -1541,7 +1567,7 @@ func (c *Config) ResolveToolImage(t Tool) string {
 // steps as {datadir}. Uses name/version rather than the ":" ID so the version never
 // appears as a ":" in a filesystem path.
 func (c *Config) ResolveToolData(t Tool) string {
-	return filepath.Join(c.CacheDirAbs(), "tools", t.Name, t.Version)
+	return filepath.Join(c.toolBase(), "tools", t.Name, t.Version)
 }
 
 // MustExist returns a helpful error if the config file is missing.

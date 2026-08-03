@@ -995,3 +995,32 @@ func TestToolPathsStayLocal(t *testing.T) {
 		}
 	})
 }
+
+// A SIF is the one part of a tool that belongs in an object store: a single
+// immutable blob. Its data dir is the opposite and stays local.
+func TestToolImageObject(t *testing.T) {
+	vep := Tool{Name: "vep", Version: "115", Image: "docker://ensemblorg/ensembl-vep:release_115.0"}
+
+	remote := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "s3://vh-sources/prod"}
+	remote.SetBaseDir("/etc/varhub")
+	if want, got := "s3://vh-sources/prod/images/vep/115/vep.sif", remote.ToolImageObject(vep); got != want {
+		t.Errorf("ToolImageObject = %q, want %q", got, want)
+	}
+	// The local path it is fetched to stays local, and the two are different
+	// things — conflating them is what produced "s3:/bucket/..." before.
+	if local := remote.ResolveToolImage(vep); strings.Contains(local, "s3:") {
+		t.Errorf("ResolveToolImage = %q, want a local path", local)
+	}
+
+	// With a local cache the local copy is already the durable one, so there is
+	// nothing to mirror.
+	localCache := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "/mnt/sources"}
+	localCache.SetBaseDir("/etc/varhub")
+	if got := localCache.ToolImageObject(vep); got != "" {
+		t.Errorf("ToolImageObject with a local cache = %q, want empty", got)
+	}
+	// A tool with no image has no object either.
+	if got := remote.ToolImageObject(Tool{Name: "x", Version: "1"}); got != "" {
+		t.Errorf("ToolImageObject with no image = %q, want empty", got)
+	}
+}

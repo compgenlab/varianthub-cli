@@ -41,6 +41,11 @@ type Store interface {
 	PutFile(ctx context.Context, ref Ref, localPath, checksum string) error
 	Remove(ctx context.Context, ref Ref) error
 	CheckBucket(ctx context.Context, bucket string) error
+	// Download writes an object out whole. Reading a source is done through
+	// iosource with range requests instead; this is for the cases that need a
+	// real local file — verification, and a container image, which apptainer
+	// runs from a path and cannot stream.
+	Download(ctx context.Context, ref Ref, w io.Writer) error
 }
 
 // S3 talks to an S3-compatible endpoint.

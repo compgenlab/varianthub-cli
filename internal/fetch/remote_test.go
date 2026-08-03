@@ -2,6 +2,8 @@ package fetch
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,6 +61,19 @@ func (s *stubStore) PutFile(_ context.Context, ref objstore.Ref, localPath, chec
 }
 
 func (s *stubStore) CheckBucket(_ context.Context, _ string) error { return nil }
+
+// Download serves an object back, so the image cache path can be exercised
+// without an endpoint.
+func (s *stubStore) Download(ctx context.Context, ref objstore.Ref, w io.Writer) error {
+	s.mu.Lock()
+	body, ok := s.objects[ref.String()]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no such object: %s", ref)
+	}
+	_, err := w.Write(body)
+	return err
+}
 
 func (s *stubStore) Remove(_ context.Context, ref objstore.Ref) error {
 	s.mu.Lock()

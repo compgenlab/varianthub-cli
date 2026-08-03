@@ -1562,6 +1562,24 @@ func (c *Config) toolBase() string {
 	return "tools-local"
 }
 
+// ToolImageObject is where a built image is kept durably, or "" when the cache
+// is a local directory and the local copy is already the durable one.
+//
+// A SIF is the one part of a tool that belongs in an object store without
+// reservation: a single immutable blob, written once and read sequentially.
+// The tool's *data* is the opposite — millions of small files opened by
+// coordinate — which is why only this has a remote home.
+func (c *Config) ToolImageObject(t Tool) string {
+	if t.Image == "" {
+		return ""
+	}
+	cd := c.CacheDirAbs()
+	if !objstore.IsRemote(cd) {
+		return ""
+	}
+	return objstore.Join(cd, "images", t.Name, t.Version, filepath.Base(c.ResolveToolImage(t)))
+}
+
 // ResolveToolData returns the tool's persistent data dir (<name>/<version>, matching
 // the image cache layout), where setup installs the tool's data; bound into container
 // steps as {datadir}. Uses name/version rather than the ":" ID so the version never

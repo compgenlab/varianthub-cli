@@ -435,21 +435,51 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 		if err := os.MkdirAll(filepath.Dir(img), 0o755); err != nil {
 			return res, err
 		}
+		// Where the built image is kept durably, when the cache is an object
+		// store. A SIF is a single immutable blob, so unlike the tool's data it
+		// belongs there without reservation — and a worker that starts with an
+		// empty disk then fetches one file instead of re-pulling and
+		// re-converting a multi-gigabyte OCI image.
+		obj := cfg.ToolImageObject(t)
+
 		switch {
 		case fileExists(img) && !force:
 			logf("%s: image cached", t.ID())
 			res.Data = "skipped"
+		case obj != "" && !force && objectExists(ctx, obj):
+			// Pinned bytes, not just a faster pull: `apptainer pull` of a
+			// mutable tag can produce a different image later, and every worker
+			// running the same annotation should run the same one.
+			logf("%s: fetching cached image", t.ID())
+			if err := fetchObject(ctx, obj, img); err != nil {
+				return res, fmt.Errorf("%s image: %w", t.ID(), err)
+			}
+			res.Data = "fetched"
 		case t.ImageIsRef():
 			logf("%s: pulling image %s", t.ID(), t.Image)
 			os.Remove(img) // pull fails if the target exists
 			if err := tool.PullImage(ctx, t, img); err != nil {
 				return res, err
 			}
+			if obj != "" {
+				logf("%s: caching image", t.ID())
+				if err := putObject(ctx, img, obj); err != nil {
+					// The image is built and usable; failing the whole download
+					// because the copy did not upload would throw away work
+					// that succeeded.
+					logf("%s: could not cache image: %v", t.ID(), err)
+				}
+			}
 			res.Data = "pulled"
 		default:
 			logf("%s: downloading image %s", t.ID(), t.Image)
 			if err := download(ctx, t.Image, img, ""); err != nil {
 				return res, fmt.Errorf("%s image: %w", t.ID(), err)
+			}
+			if obj != "" {
+				if err := putObject(ctx, img, obj); err != nil {
+					logf("%s: could not cache image: %v", t.ID(), err)
+				}
 			}
 			res.Data = "downloaded"
 		}

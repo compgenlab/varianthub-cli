@@ -95,6 +95,58 @@ func locatorSize(ctx context.Context, loc string) (int64, bool, error) {
 	return obj.Size, ok, err
 }
 
+// objectExists reports whether a locator holds an object, treating an error as
+// absence. A cache lookup that cannot reach the store should fall through to
+// building the thing, not fail the download — the store is an optimisation here,
+// not the source of truth.
+func objectExists(ctx context.Context, loc string) bool {
+	ok, err := locatorExists(ctx, loc)
+	return err == nil && ok
+}
+
+// fetchObject copies an object to a local file, writing through a temp file so
+// an interrupted copy cannot leave something that later looks cached.
+func fetchObject(ctx context.Context, loc, dest string) error {
+	store, err := remoteStore()
+	if err != nil {
+		return err
+	}
+	ref, err := objstore.Parse(loc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".varhub-fetch-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+
+	if err := store.Download(ctx, ref, tmp); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), dest)
+}
+
+// putObject uploads a local file to a locator.
+func putObject(ctx context.Context, src, loc string) error {
+	store, err := remoteStore()
+	if err != nil {
+		return err
+	}
+	ref, err := objstore.Parse(loc)
+	if err != nil {
+		return err
+	}
+	return store.PutFile(ctx, ref, src, "")
+}
+
 // locatorRemove deletes whatever is at a locator, tolerating its absence.
 func locatorRemove(ctx context.Context, loc string) error {
 	if !objstore.IsObject(loc) {

@@ -39,6 +39,10 @@ type Object struct {
 type Store interface {
 	Stat(ctx context.Context, ref Ref) (Object, bool, error)
 	PutFile(ctx context.Context, ref Ref, localPath, checksum string) error
+	// PutStream uploads without a local copy, for data that needs no local
+	// processing on the way past. The reader is consumed once and cannot be
+	// rewound, so a failure part-way is not retried — see the method comment.
+	PutStream(ctx context.Context, ref Ref, r io.Reader, checksum string) error
 	Remove(ctx context.Context, ref Ref) error
 	CheckBucket(ctx context.Context, bucket string) error
 	// Download writes an object out whole. Reading a source is done through
@@ -176,6 +180,44 @@ func (s *S3) PutFile(ctx context.Context, ref Ref, localPath, checksum string) e
 			// The manager already aborted; say so, because "upload failed" on a
 			// 24 GB object otherwise leaves the operator wondering whether they
 			// are now paying for orphaned parts.
+			return fmt.Errorf("upload %s: %w (multipart upload %s was aborted; no partial object remains)",
+				ref, err, mu.UploadID())
+		}
+		return fmt.Errorf("upload %s: %w", ref, err)
+	}
+	return nil
+}
+
+// PutStream uploads straight from a reader, with no local copy.
+//
+// For data that passes through untouched: nothing is read back, so nothing needs
+// to be on a disk first. That matters because the alternative is scratch space
+// the size of the largest single file a source publishes — tens of gigabytes for
+// dbSNP or CADD — held only so the bytes can be hashed on the way past, which a
+// reader can do just as well.
+//
+// Verification is the caller's, and it must be arranged so a mismatch fails a
+// *read* rather than being checked afterwards: the manager aborts the multipart
+// upload when the body errors, so a bad digest leaves nothing behind, while a
+// check after Upload returns would be a check on an object already visible.
+// fetch.verifyingReader does this.
+//
+// The trade against PutFile is retries. A reader is consumed once and cannot be
+// rewound, so a failure mid-upload restarts the transfer from the source rather
+// than from a local copy. Worth it when the local copy exists for no other
+// reason; not worth it when something has to read the file anyway.
+func (s *S3) PutStream(ctx context.Context, ref Ref, r io.Reader, checksum string) error {
+	in := &s3.PutObjectInput{
+		Bucket: aws.String(ref.Bucket),
+		Key:    aws.String(ref.Key),
+		Body:   r,
+	}
+	if checksum != "" {
+		in.Metadata = map[string]string{checksumMeta: checksum}
+	}
+	if _, err := s.uploader.Upload(ctx, in); err != nil {
+		var mu manager.MultiUploadFailure
+		if errors.As(err, &mu) {
 			return fmt.Errorf("upload %s: %w (multipart upload %s was aborted; no partial object remains)",
 				ref, err, mu.UploadID())
 		}

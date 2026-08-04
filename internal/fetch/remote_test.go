@@ -1,7 +1,10 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +49,28 @@ func (s *stubStore) PutFile(_ context.Context, ref objstore.Ref, localPath, chec
 	b, err := os.ReadFile(localPath)
 	if err != nil {
 		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failPut {
+		return os.ErrPermission
+	}
+	s.puts++
+	s.objects[ref.String()] = b
+	if checksum != "" {
+		s.meta[ref.String()] = checksum
+	}
+	return nil
+}
+
+// PutStream mirrors the real store's contract in the way that matters here: the
+// body is read to completion, and a read error means nothing is stored. That is
+// how an abort-on-mismatch upload behaves, and asserting it needs the stub to
+// leave no object behind rather than a partial one.
+func (s *stubStore) PutStream(_ context.Context, ref objstore.Ref, r io.Reader, checksum string) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err // the multipart upload would have been aborted; store nothing
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -326,4 +351,99 @@ func TestMissingChecksTheObjectStore(t *testing.T) {
 	if m := Missing(cfg, src); len(m) != 0 {
 		t.Errorf("a complete source still reported missing: %v", m)
 	}
+}
+
+// Scratch is for work, not for transit.
+//
+// A source whose index the upstream already publishes needs nothing read
+// locally: the digest can be taken from the stream. Staging it anyway means
+// scratch the size of the largest single file a source publishes — tens of
+// gigabytes for dbSNP or CADD — held only so the bytes can be hashed on the way
+// past. This asserts the file never touches a disk, which is the whole point.
+func TestPublishedIndexStreamsWithoutStaging(t *testing.T) {
+	s := newStubStore()
+	SetStore(s)
+	t.Cleanup(func() { SetStore(nil) })
+
+	data := []byte("chr1\t1\tA\tT\n")
+	idx := []byte("fake index bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".tbi"):
+			w.Write(idx)
+		default:
+			w.Write(data)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// Any staging directory this creates would appear under TMPDIR.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	f := config.SourceFile{
+		URL:      srv.URL + "/d.tsv.gz",
+		URLIndex: srv.URL + "/d.tsv.gz.tbi",
+		Path:     "s3://bucket/d.tsv.gz",
+		Checksum: "sha256:" + hexSHA256(data),
+	}
+	// The pair check needs a store that serves range requests, which a stub does
+	// not; it is covered separately below. What matters here is the decision to
+	// stream and what lands in the store.
+	verifyPair = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() { verifyPair = verifyRemotePair })
+
+	_, _, err := fetchFileRemote(context.Background(), f, "tab", "src", false, true)
+	if err != nil {
+		t.Fatalf("fetchFileRemote: %v", err)
+	}
+
+	if got := s.objects["s3://bucket/d.tsv.gz"]; !bytes.Equal(got, data) {
+		t.Errorf("data object = %q, want %q", got, data)
+	}
+	if got := s.objects["s3://bucket/d.tsv.gz.tbi"]; !bytes.Equal(got, idx) {
+		t.Errorf("index object = %q, want %q", got, idx)
+	}
+
+	entries, _ := os.ReadDir(tmp)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "varhub-stage-") {
+			t.Errorf("staged to %s; a published index needs no local copy", e.Name())
+		}
+	}
+}
+
+// A digest that disagrees must leave nothing readable.
+//
+// With staging, a bad checksum simply means the upload never starts. Streaming
+// has no such moment, so verification has to fail a *read* — the upload manager
+// aborts on a body error, and an object that was never completed is one no
+// reader can see. Checking after the upload returned would be checking
+// something already visible.
+func TestStreamedChecksumMismatchPublishesNothing(t *testing.T) {
+	s := newStubStore()
+	SetStore(s)
+	t.Cleanup(func() { SetStore(nil) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("the bytes actually served"))
+	}))
+	t.Cleanup(srv.Close)
+
+	err := streamToObject(context.Background(), srv.URL+"/d.gz", "s3://bucket/d.gz",
+		"sha256:"+hexSHA256([]byte("what the manifest promised")))
+	if err == nil {
+		t.Fatal("a mismatched digest was accepted")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Errorf("error does not name the mismatch: %v", err)
+	}
+	if _, ok := s.objects["s3://bucket/d.gz"]; ok {
+		t.Error("an object was published despite the digest disagreeing")
+	}
+}
+
+func hexSHA256(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

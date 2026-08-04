@@ -2,23 +2,34 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/compgenlab/varianthub-cli/internal/checksum"
 	"github.com/compgenlab/varianthub-cli/internal/objstore"
 )
 
-// The cache can be a local directory or an S3 prefix. Everything varhub does to
-// a source — verify a checksum, build a tabix index, open it to confirm it
-// works — needs a real file, so a remote cache is served by staging one file at
-// a time locally and uploading the result.
+// The cache can be a local directory or an S3 prefix. A remote cache is served
+// one file at a time, by one of two routes:
 //
-// That staging requirement is worth stating plainly, since "the server cannot
-// store the annotation files" is what motivated remote caches in the first
-// place: provisioning needs scratch for the largest single file, not for the
-// whole snapshot.
+//   - Streamed, when nothing here has to read the file: the bytes go from the
+//     upstream response straight into the object, hashed on the way past. This
+//     is the common case, because most sources publish an index beside their
+//     data.
+//   - Staged, when something does: building a tabix index reads the whole file,
+//     and a build recipe or a GTF conversion rewrites it. Those need a real
+//     file, so one is written to scratch, worked on, uploaded and dropped.
+//
+// The distinction is worth keeping sharp, because scratch is the expensive
+// resource here. Staging costs the size of the largest single file a source
+// publishes — tens of gigabytes for dbSNP or CADD — and on an ephemeral disk
+// that is a limit someone has to provision for. Streaming spends none of it, so
+// the staging path should be reached only when the work genuinely requires it.
 
 var (
 	storeMu   sync.RWMutex
@@ -132,6 +143,99 @@ func fetchObject(ctx context.Context, loc, dest string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), dest)
+}
+
+// verifyingReader hashes bytes as they are read and fails the final read when
+// the digest disagrees.
+//
+// Failing the *read* is the whole point. The upload manager aborts a multipart
+// upload when the body returns an error, so a mismatch means no object is ever
+// completed; checking the digest after the upload returned would be checking an
+// object readers can already see. A nil Verifier hashes nothing and always
+// passes, which is how an unverified source streams.
+type verifyingReader struct {
+	r io.Reader
+	v *checksum.Verifier
+}
+
+func (vr *verifyingReader) Read(p []byte) (int, error) {
+	n, err := vr.r.Read(p)
+	if n > 0 {
+		_, _ = vr.v.Write(p[:n])
+	}
+	if errors.Is(err, io.EOF) {
+		if cErr := vr.v.Check(); cErr != nil {
+			// Returned instead of EOF, so the upload fails rather than completes.
+			return n, cErr
+		}
+	}
+	return n, err
+}
+
+// streamToObject downloads a URL straight into an object, with no local copy.
+//
+// For files nothing here needs to read: the bytes are hashed on the way past and
+// otherwise pass through untouched. Anything that has to be opened locally —
+// building an index, converting a format — belongs on the staging path instead.
+func streamToObject(ctx context.Context, url, loc, sum string) error {
+	v, err := checksum.New(sum)
+	if err != nil {
+		return err
+	}
+	store, err := remoteStore()
+	if err != nil {
+		return err
+	}
+	ref, err := objstore.Parse(loc)
+	if err != nil {
+		return err
+	}
+	resp, err := httpDo(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+	if err := store.PutStream(ctx, ref, &verifyingReader{r: resp.Body, v: v}, sum); err != nil {
+		return fmt.Errorf("stream %s: %w", url, err)
+	}
+	return nil
+}
+
+// verifyPair is indirected so tests can exercise the streaming decision without
+// an object store that can serve a tabix pair by range request. Production
+// always uses verifyRemotePair.
+var verifyPair = verifyRemotePair
+
+// verifyRemotePair opens an uploaded data/index pair and removes both if it does
+// not work.
+//
+// The staging path proves the pair before publishing it, by opening the local
+// copy. Streaming has no local copy, so the check moves after the upload — which
+// means it has to clean up rather than simply decline to publish. Removing the
+// data first is what makes that safe: a reader that finds data is entitled to
+// assume an index, so data must be the first thing to go.
+//
+// Leaving a broken pair in place would be the worst outcome available. It looks
+// cached, so the next run skips it, and the failure surfaces later as a source
+// that returns nothing.
+func verifyRemotePair(ctx context.Context, loc, idxExt string) error {
+	r, err := objstore.OpenTabix(ctx, loc)
+	if err == nil {
+		r.Close()
+		return nil
+	}
+	if rmErr := locatorRemove(ctx, loc); rmErr != nil {
+		return fmt.Errorf("verify %s: %w (and the broken object could not be removed: %v)",
+			loc, err, rmErr)
+	}
+	if rmErr := locatorRemove(ctx, loc+idxExt); rmErr != nil {
+		return fmt.Errorf("verify %s: %w (and the broken index could not be removed: %v)",
+			loc, err, rmErr)
+	}
+	return fmt.Errorf("verify %s: %w (nothing was published)", loc, err)
 }
 
 // putObject uploads a local file to a locator.

@@ -1090,6 +1090,46 @@ func httpDo(ctx context.Context, url string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
+// httpExists reports whether a URL serves something, without fetching it.
+//
+// Used to find out whether an upstream publishes an index beside its data. A
+// HEAD rather than a GET because the answer decides which path provisioning
+// takes, and asking must not cost a download.
+func httpExists(ctx context.Context, url string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// upstreamIndex finds the index an upstream publishes for a file: the explicit
+// url_index, or a sibling beside the data URL.
+//
+// Whether one exists decides whether provisioning needs scratch at all. An
+// index that is published is just another file to copy; one that has to be
+// built has to be built *from* the data, which means the data on a disk.
+func upstreamIndex(ctx context.Context, f config.SourceFile) (url, ext, sum string) {
+	if f.URLIndex != "" {
+		ext = ".tbi"
+		if strings.HasSuffix(f.URLIndex, ".csi") {
+			ext = ".csi"
+		}
+		return f.URLIndex, ext, f.ChecksumIndex
+	}
+	for _, e := range []string{".tbi", ".csi"} {
+		if httpExists(ctx, f.URL+e) {
+			return f.URL + e, e, ""
+		}
+	}
+	return "", "", ""
+}
+
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
@@ -1160,12 +1200,6 @@ func fetchFileRemote(ctx context.Context, f config.SourceFile, format, label str
 		}
 	}
 
-	st, err := newStaging(f.Path)
-	if err != nil {
-		return "", "", err
-	}
-	defer st.close()
-
 	if a := algoOf(f.Checksum); a != "" {
 		logf("%s: downloading %s (verifying %s)", label, base, a)
 	} else {
@@ -1175,16 +1209,55 @@ func fetchFileRemote(ctx context.Context, f config.SourceFile, format, label str
 	if err != nil {
 		return "", "", err
 	}
-	if err := download(ctx, f.URL, st.work, sum); err != nil {
-		return "", "", err
-	}
 
-	if selfIndexed {
-		if err := st.publish(ctx, f.Path, f.Checksum); err != nil {
+	// Scratch is for work, not for transit. Nothing here reads the data unless
+	// an index has to be built from it, and building is the only reason a
+	// multi-gigabyte file needs to exist on a disk on the way past — the digest
+	// can be taken from the stream. A source with no index at all, or one whose
+	// index the upstream already publishes, streams straight into the store.
+	idxURL, idxExt, idxSum := "", "", ""
+	if !selfIndexed {
+		idxURL, idxExt, idxSum = upstreamIndex(ctx, f)
+	}
+	if selfIndexed || idxURL != "" {
+		// Index first, so an interrupted run never leaves data that looks
+		// complete with no index beside it — the same order publish() uses.
+		if idxURL != "" {
+			s, cErr := resolveChecksum(ctx, idxSum, base+idxExt)
+			if cErr != nil {
+				return "", "", cErr
+			}
+			if err := streamToObject(ctx, idxURL, f.Path+idxExt, s); err != nil {
+				return "", "", fmt.Errorf("stream index: %w", err)
+			}
+		}
+		if err := streamToObject(ctx, f.URL, f.Path, sum); err != nil {
 			return "", "", err
 		}
-		logf("%s: uploaded %s", label, base)
+		if idxURL != "" {
+			// Prove the pair works before it becomes the copy everyone reads —
+			// the same check the staging path makes, made against the objects by
+			// range request rather than against a local copy. Cheap: opening a
+			// tabix file reads its header and index, not its contents.
+			if err := verifyPair(ctx, f.Path, idxExt); err != nil {
+				return "", "", err
+			}
+			logf("%s: index %s (downloaded), streamed", label, base)
+			return "downloaded", "downloaded", nil
+		}
+		logf("%s: streamed %s", label, base)
 		return "downloaded", "none", nil
+	}
+
+	// An index has to be built, which needs the data on a disk.
+	st, err := newStaging(f.Path)
+	if err != nil {
+		return "", "", err
+	}
+	defer st.close()
+
+	if err := download(ctx, f.URL, st.work, sum); err != nil {
+		return "", "", err
 	}
 
 	index, err = ensureIndex(ctx, f, st.work, format, true)

@@ -514,6 +514,24 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 		switch {
 		case fileExists(sentinel) && !force:
 			res.Index = "setup: skipped"
+			// The archive is separate state from the setup, so a run that finds
+			// the work already done still checks whether the copy exists.
+			//
+			// Publishing used to happen only in the branch that ran setup, which
+			// made a failed upload unrecoverable: the sentinel says "done", so
+			// every later run skips, and the only way back is --force and the
+			// whole install again. That is days for VEP, to retry a step that
+			// takes minutes and had failed for a passing reason — a full disk,
+			// an expired credential, a bucket not yet created.
+			//
+			// Keyed on the object being absent rather than on a flag, so the
+			// restored branch needs no special case: data that came from the
+			// archive is data whose archive exists.
+			if obj := toolDataObject(cfg, t); obj != "" && !objectExists(ctx, obj) {
+				logf("%s: setup is done but not archived; uploading", t.ID())
+				publishToolData(ctx, cfg, t, datadir, logf)
+				res.Index = "setup: skipped, archived"
+			}
 		// A machine with no data of its own, when someone has already done this
 		// work and published it. Unpacking a tarball is minutes where running
 		// setup can be hours.

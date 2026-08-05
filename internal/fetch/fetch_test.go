@@ -626,3 +626,113 @@ func TestMissingAcceptsPrunedGTF(t *testing.T) {
 		t.Errorf("missing = %v, want the raw path", m)
 	}
 }
+
+// A failed archive must be recoverable without redoing the install.
+//
+// Publishing used to happen only in the branch that ran setup. So an upload that
+// failed for a passing reason — a full disk, an expired credential, a bucket not
+// yet created — was unrecoverable: the sentinel says the work is done, every
+// later run skips, and the only way back is --force and the whole install again.
+// For VEP that is days, to retry a step that takes minutes.
+func TestArchiveIsRetriedWithoutRerunningSetup(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(
+		"data_dir = \""+home+"/data\"\ncache_dir = \"s3://bucket/cache\"\n"+
+			"annotations_dir = \""+home+"/annotations\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srcDir := cfg.SourceDir("vep", "113")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A marker whose mtime shows whether setup ran again.
+	frag := "[[sources]]\ntype=\"tool\"\nname=\"vep\"\nversion=\"113\"\n" +
+		"  [[sources.setup]]\n  run=\"touch {datadir}/installed\"\n" +
+		"  [[sources.steps]]\n  run=\"true\"\n"
+	if err := os.WriteFile(cfg.SourceFile("vep", "113"), []byte(frag), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// tool_cache is a deployment fact, so it arrives through the overlay rather
+	// than the manifest — the same way it does in production.
+	if err := os.WriteFile(cfg.LocationsPath("vep", "113"),
+		[]byte("tool_cache = \"s3://bucket/cache\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.SnapshotsPath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.SnapshotFile("s"),
+		[]byte("assembly=\"GRCh38\"\nsources=[\"vep:113\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	res, err := Snapshot(ctx, cfg, snap, "", false, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res[0].Index != "setup: done" {
+		t.Fatalf("first run: %q, want 'setup: done'", res[0].Index)
+	}
+	obj := toolDataObject(cfg, snap.Sources[0].AsTool())
+	if obj == "" {
+		t.Fatal("no archive locator: tool_cache did not reach the tool")
+	}
+	if !objectExists(ctx, obj) {
+		t.Fatal("first run did not archive")
+	}
+
+	marker := filepath.Join(cfg.ResolveToolData(snap.Sources[0].AsTool()), "installed")
+	fi, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedAt := fi.ModTime()
+
+	// The archive is lost — the upload failed, or the bucket was pruned. The
+	// install itself is untouched, sentinel and all.
+	if err := locatorRemove(ctx, obj); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = Snapshot(ctx, cfg, snap, "", false, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !objectExists(ctx, obj) {
+		t.Error("the missing archive was not re-uploaded; only --force could fix it, " +
+			"which means redoing an install that can take days")
+	}
+	if res[0].Index != "setup: skipped, archived" {
+		t.Errorf("status = %q, want 'setup: skipped, archived'", res[0].Index)
+	}
+	// The whole point: the install was left alone.
+	if fi, err = os.Stat(marker); err != nil {
+		t.Fatal(err)
+	} else if !fi.ModTime().Equal(installedAt) {
+		t.Error("setup ran again; the archive should be retried on its own")
+	}
+
+	// With the archive present, a further run uploads nothing.
+	before := st.puts
+	if _, err = Snapshot(ctx, cfg, snap, "", false, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if st.puts != before {
+		t.Errorf("re-archived an archive that already existed (%d → %d puts)", before, st.puts)
+	}
+}

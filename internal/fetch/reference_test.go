@@ -385,3 +385,314 @@ func TestToolResultSourceIsTheIdentity(t *testing.T) {
 			"so anything else means the tool reports no files", res.Source)
 	}
 }
+
+// refHomeS3 is refHome with cache_dir on an object store, so a durable copy has
+// somewhere to live. It returns the origin's hit count so a test can prove a
+// restore did not fall back to downloading a gigabyte from someone else's server.
+func refHomeS3(t *testing.T, body []byte, name string) (*config.Config, config.Source, *int) {
+	t.Helper()
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	home := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.toml", "data_dir = \""+home+"/data\"\ncache_dir = \"s3://bucket/cache\"\n"+
+		"annotations_dir = \""+home+"/annotations\"\n")
+	write("annotations/sources/GRCh38/1/GRCh38-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38\"\nversion=\"1\"\nassembly=\"GRCh38\"\n"+
+			"url=\""+srv.URL+"/"+name+"\"\n")
+	write("annotations/snapshots/s.toml", "assembly=\"GRCh38\"\nsources=[\"GRCh38:1\"]\n")
+
+	cfg, err := config.Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, snap.Sources[0], &hits
+}
+
+// gzipped returns the plain-gzip form the references people publish come in.
+func gzipped(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf strings.Builder
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return []byte(buf.String())
+}
+
+// The whole point of the durable copy: a second machine restores what the first
+// prepared instead of repeating the download, the bgzip pass and the index.
+//
+// Until this existed the upload had no reader at all — a replica that had not
+// run the provisioning download annotated with a --fasta pointing at a file
+// nothing had created.
+func TestEnsureReferenceRestoresFromDurableCopy(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, src, hits := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+
+	// Machine one provisions: downloads, recompresses, indexes, uploads.
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	if *hits != 1 {
+		t.Fatalf("provisioning hit the origin %d times, want 1", *hits)
+	}
+
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Reference == "" {
+		t.Fatal("the snapshot resolved no reference")
+	}
+
+	// Machine two has the same catalog and none of the files.
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		os.Remove(snap.Reference + ext)
+	}
+	if _, ok := preparedReference(snap.Reference); ok {
+		t.Fatal("the local copy was not actually removed")
+	}
+
+	before := *hits
+	if err := EnsureReference(context.Background(), cfg, snap); err != nil {
+		t.Fatalf("EnsureReference: %v", err)
+	}
+	if _, ok := preparedReference(snap.Reference); !ok {
+		t.Fatal("EnsureReference returned success without producing a usable reference")
+	}
+	// Restored, not re-downloaded. This is the difference the durable copy buys.
+	if *hits != before {
+		t.Errorf("the origin was hit %d more time(s); the durable copy was not used",
+			*hits-before)
+	}
+	// The index came back too, so no tool has to rebuild it.
+	if _, err := os.Stat(snap.Reference + ".fai"); err != nil {
+		t.Errorf(".fai was not restored: %v", err)
+	}
+}
+
+// A reference already on this machine must not transfer anything. A snapshot can
+// pin one that no selected annotation needs, and this runs where a tool is about
+// to start — a gigabyte per job would be paid on every run.
+func TestEnsureReferenceTransfersNothingWhenAlreadyLocal(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, src, _ := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st.mu.Lock()
+	before := st.gets
+	st.mu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		if err := EnsureReference(context.Background(), cfg, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st.mu.Lock()
+	after := st.gets
+	st.mu.Unlock()
+	if after != before {
+		t.Errorf("downloaded %d object(s) for a reference already present", after-before)
+	}
+}
+
+// A snapshot pinning no reference is not this function's problem — the caller
+// reports that, with a message about what requires one.
+func TestEnsureReferenceIgnoresSnapshotsWithoutOne(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, _, _ := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	if err := EnsureReference(context.Background(), cfg, &config.Snapshot{}); err != nil {
+		t.Errorf("EnsureReference on a snapshot with no reference: %v", err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.gets != 0 {
+		t.Errorf("transferred %d object(s) for a snapshot that pins no reference", st.gets)
+	}
+}
+
+// Missing locally with nothing to restore from has to say so plainly, naming the
+// command that fixes it — the alternative is VEP failing inside a container over
+// a path the operator never chose.
+func TestEnsureReferenceExplainsWhenNothingCanRestoreIt(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, _, _ := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = EnsureReference(context.Background(), cfg, snap)
+	if err == nil {
+		t.Fatal("a reference that is neither local nor durable was accepted")
+	}
+	if !strings.Contains(err.Error(), "varhub download") {
+		t.Errorf("the error does not say how to fix it: %v", err)
+	}
+}
+
+// A durable copy without its index is not a usable reference. Reporting it as one
+// moves the failure into a container, a long way from the cause.
+func TestEnsureReferenceRejectsADurableCopyWithNoIndex(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, src, _ := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drop the index from the store, keeping the FASTA — the shape a copy
+	// uploaded before indexing finished would have.
+	st.mu.Lock()
+	for k := range st.objects {
+		if strings.HasSuffix(k, ".fai") {
+			delete(st.objects, k)
+		}
+	}
+	st.mu.Unlock()
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		os.Remove(snap.Reference + ext)
+	}
+
+	err = EnsureReference(context.Background(), cfg, snap)
+	if err == nil {
+		t.Fatal("a durable copy with no .fai was accepted as usable")
+	}
+	if !strings.Contains(err.Error(), ".fai") {
+		t.Errorf("the error does not name the missing index: %v", err)
+	}
+}
+
+// Provisioning a second machine should also prefer the durable copy: it is
+// already BGZF and indexed, so restoring skips the decompress, the bgzip pass
+// and the index build as well as the transfer from the origin.
+func TestFetchReferencePrefersTheDurableCopyOverTheOrigin(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, src, hits := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	if *hits != 1 {
+		t.Fatalf("origin hits after provisioning = %d, want 1", *hits)
+	}
+
+	// A second machine: same catalog and store, no local files.
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		os.Remove(snap.Reference + ext)
+	}
+
+	res, err := fetchReference(context.Background(), cfg, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *hits != 1 {
+		t.Errorf("the origin was hit again (%d total); the durable copy was ignored", *hits)
+	}
+	if res.Data != "restored" {
+		t.Errorf("Data = %q, want %q", res.Data, "restored")
+	}
+	if _, ok := preparedReference(snap.Reference); !ok {
+		t.Error("the restore left no usable reference")
+	}
+}
+
+// Provisioning from a durable copy that has no index must fall back to the
+// origin, not report a restore. The copy is only worth using if it saves the
+// index build; one without an index saves nothing and produces a FASTA no tool
+// can random-access.
+//
+// Falling back rather than failing, because the origin always works — a
+// half-uploaded copy should cost time, not the provisioning run.
+func TestFetchReferenceFallsBackWhenTheDurableCopyHasNoIndex(t *testing.T) {
+	st := newStubStore()
+	SetStore(st)
+	t.Cleanup(func() { SetStore(nil) })
+
+	cfg, src, hits := refHomeS3(t, gzipped(t, referenceFasta()), "GRCh38.fa.gz")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shape a copy uploaded before indexing finished would have.
+	st.mu.Lock()
+	for k := range st.objects {
+		if strings.HasSuffix(k, ".fai") {
+			delete(st.objects, k)
+		}
+	}
+	st.mu.Unlock()
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		os.Remove(snap.Reference + ext)
+	}
+
+	res, err := fetchReference(context.Background(), cfg, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Data == "restored" {
+		t.Error("reported a restore from a durable copy with no index")
+	}
+	if *hits != 2 {
+		t.Errorf("origin hits = %d, want 2 (it should have fallen back)", *hits)
+	}
+	if _, ok := preparedReference(snap.Reference); !ok {
+		t.Error("the fallback left no usable reference")
+	}
+}

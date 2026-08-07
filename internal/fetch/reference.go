@@ -52,6 +52,13 @@ func fetchReference(ctx context.Context, cfg *config.Config, src config.Source,
 		if p, ok := preparedReference(f.Path); ok {
 			res.Data, res.Index = "skipped", "reused"
 			logf("%s: cached %s", src.ID(), filepath.Base(p))
+			// The durable copy is separate state from the local one, so a run
+			// that finds the work already done still checks whether the copy
+			// exists. Returning here unconditionally is how a prepared reference
+			// could never acquire one: the local file satisfies every later run,
+			// so the upload never gets a second chance — the same trap the tool
+			// archive fell into.
+			publishReferenceIfMissing(ctx, cfg, p, src)
 			return res, nil
 		}
 	}
@@ -86,14 +93,34 @@ func fetchReference(ctx context.Context, cfg *config.Config, src config.Source,
 	// recompressed and indexed rather than repeating most of a gigabyte and a
 	// bgzip pass. Best effort: the reference is already usable here, and failing
 	// the download over the copy would discard work that went right.
-	if dst := cfg.CacheDirAbs(); objstore.IsObject(dst) {
-		if err := publishReference(ctx, prepared, dst, src); err != nil {
-			logf("%s: durable copy failed: %v", src.ID(), err)
-		} else {
-			logf("%s: durable copy kept", src.ID())
-		}
-	}
+	publishReferenceIfMissing(ctx, cfg, prepared, src)
 	return res, nil
+}
+
+// publishReferenceIfMissing uploads the durable copy when the store does not
+// already have it.
+//
+// Keyed on the object being absent rather than on a flag, so a run that
+// prepared the file and a run that found it prepared behave the same. Best
+// effort: the reference is usable locally either way, and failing the download
+// over the copy would discard work that went right.
+func publishReferenceIfMissing(ctx context.Context, cfg *config.Config, local string,
+	src config.Source) {
+
+	dst := cfg.CacheDirAbs()
+	if !objstore.IsObject(dst) {
+		return
+	}
+	target := objstore.Join(dst, src.Name, src.Version, filepath.Base(local))
+	if objectExists(ctx, target) {
+		return
+	}
+	logf("%s: uploading the durable copy", src.ID())
+	if err := publishReference(ctx, local, dst, src); err != nil {
+		logf("%s: durable copy failed: %v", src.ID(), err)
+		return
+	}
+	logf("%s: durable copy kept", src.ID())
 }
 
 // publishReference uploads a prepared reference and its indexes.

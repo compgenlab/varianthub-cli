@@ -292,3 +292,53 @@ func TestInventoryCoversToolArchive(t *testing.T) {
 		t.Errorf("the tool archive is not listed: %+v", got)
 	}
 }
+
+// A prepared reference must still acquire its durable copy.
+//
+// The local file satisfies every later run, so returning early on the skip path
+// meant the upload never got a second chance — a reference prepared before a
+// storage location was configured could never be copied to it without deleting
+// the local file first. The tool archive fell into exactly this trap.
+func TestPreparedReferenceStillGetsItsDurableCopy(t *testing.T) {
+	store := useStub(t)
+	var gzBody strings.Builder
+	zw := gzip.NewWriter(&gzBody)
+	zw.Write([]byte(referenceFasta()))
+	zw.Close()
+
+	cfg, src := refHome(t, []byte(gzBody.String()), "GRCh38.fa.gz")
+	// A remote cache, so a durable copy is expected.
+	cfg.CacheDir = "s3://bucket/prefix"
+
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	obj := "s3://bucket/prefix/GRCh38/1/GRCh38.fa.gz"
+	if _, ok := store.objects[obj]; !ok {
+		t.Fatalf("first run published no durable copy; have %v", keysOf(store.objects))
+	}
+
+	// Lose the copy, as a pruned bucket or a failed upload would.
+	delete(store.objects, obj)
+
+	// The local file is prepared, so this run takes the skip path.
+	res, err := fetchReference(context.Background(), cfg, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Data != "skipped" {
+		t.Fatalf("expected the skip path, got Data=%q", res.Data)
+	}
+	if _, ok := store.objects[obj]; !ok {
+		t.Error("the missing durable copy was not re-uploaded; it could only be " +
+			"fixed by deleting the local file and re-fetching a gigabyte")
+	}
+}
+
+func keysOf(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

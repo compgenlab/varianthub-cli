@@ -1423,19 +1423,32 @@ func (c *Config) resolveReference(snap *Snapshot) error {
 		snap.Reference = c.ReferenceFor(snap.Assembly)
 	}
 
-	// Checked here rather than at run time so the failure lands on whoever
-	// assembled the snapshot. Otherwise {ref} renders empty and the tool fails
-	// on a mangled command line — "--fasta --fork 4" reads as a flag problem
-	// and says nothing about a missing genome.
-	if snap.Reference == "" {
-		for _, src := range snap.Sources {
-			if src.RequiresReference {
-				return fmt.Errorf("source %s requires a reference genome, but none is pinned "+
-					"(add a type=\"reference\" source for %s)", src.ID(), snap.Assembly)
-			}
+	return nil
+}
+
+// RequiresMissingReference names a source that needs a reference genome when the
+// snapshot pins none, or "" when everything it needs is present.
+//
+// Checked where a tool is about to run rather than at load, because the two are
+// different questions. Provisioning a tool fetches an image and runs its
+// installer; it does not open a genome, and refusing to download VEP because no
+// FASTA is registered yet would make the order of setup steps matter for no
+// reason. Annotating with it does open one, and there the requirement is real.
+//
+// The failure it replaces is worth stating: {ref} renders empty, the tool gets
+// "--fasta --fork 4", and VEP reports "Unexpected extra command-line
+// parameter(s): 4" — a message about argument parsing that says nothing about a
+// missing genome.
+func (snap *Snapshot) RequiresMissingReference() string {
+	if snap.Reference != "" {
+		return ""
+	}
+	for _, src := range snap.Sources {
+		if src.RequiresReference {
+			return src.ID()
 		}
 	}
-	return nil
+	return ""
 }
 
 // verifyAssembly rejects any source whose declared assembly differs from the
@@ -1828,7 +1841,11 @@ func (c *Config) ToolImageObject(t Tool) string {
 	if !objstore.IsRemote(cd) {
 		return ""
 	}
-	return objstore.Join(cd, "images", t.Name, t.Version, filepath.Base(c.ResolveToolImage(t)))
+	// Under <name>/<version>/ like every other file a source owns. It used to
+	// live at images/<name>/<version>/, which the storage browser attributes by
+	// prefix and therefore never tied to its source — so a 1.5 GB image was
+	// uploaded and then invisible, the same way the setup archive was.
+	return objstore.Join(cd, t.Name, t.Version, "image", filepath.Base(c.ResolveToolImage(t)))
 }
 
 // ResolveToolData returns the tool's persistent data dir (<name>/<version>, matching

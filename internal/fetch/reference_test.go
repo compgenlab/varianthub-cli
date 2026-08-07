@@ -342,3 +342,46 @@ func keysOf(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// A download's JSON output attaches each source's inventory by looking results
+// up by name:version, so Result.Source has to be that and nothing else.
+//
+// setupToolSource used to append " (tool)" for the text listing, so the lookup
+// never matched: every tool reported an empty file list, and a 35 GB setup
+// archive and a 1.5 GB image were invisible in the storage browser and missing
+// from the metrics.
+func TestToolResultSourceIsTheIdentity(t *testing.T) {
+	home := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.toml", "data_dir = \""+home+"/data\"\ncache_dir = \""+home+"/cache\"\n"+
+		"annotations_dir = \""+home+"/annotations\"\n")
+	write("annotations/sources/vep/113/vep-113.toml",
+		"[[sources]]\ntype=\"tool\"\nname=\"vep\"\nversion=\"113\"\n"+
+			"  [[sources.setup]]\n  run=\"true\"\n  [[sources.steps]]\n  run=\"true\"\n")
+	write("annotations/snapshots/s.toml", "assembly=\"GRCh38\"\nsources=[\"vep:113\"]\n")
+
+	cfg, err := config.Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := setupToolSource(context.Background(), cfg, snap.Sources[0], "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source != "vep:113" {
+		t.Errorf("Result.Source = %q, want vep:113 — the JSON output keys on this, "+
+			"so anything else means the tool reports no files", res.Source)
+	}
+}

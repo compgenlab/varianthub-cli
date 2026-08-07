@@ -445,7 +445,12 @@ func aggregate(src config.Source, results []fileResult) Result {
 // unless force. `ref` is the snapshot's reference FASTA. Called by Snapshot.
 func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source, ref string, force bool) (Result, error) {
 	t := src.AsTool() // execution view
-	res := Result{Source: t.ID() + " (tool)", Data: "-", Index: "-"}
+	// Source is an identity, not a label: the JSON output looks results up by it
+	// to attach each source's file inventory. It used to carry a " (tool)"
+	// suffix for the text listing, so the lookup never matched and no tool ever
+	// reported its files — which is why a 35 GB setup archive and a 1.5 GB image
+	// were invisible in the storage browser and missing from the metrics.
+	res := Result{Source: t.ID(), Data: "-", Index: "-"}
 
 	if err := software.Check(t.ID(), t.RequiredSoftware()); err != nil {
 		return res, err

@@ -997,13 +997,16 @@ func TestToolPathsStayLocal(t *testing.T) {
 }
 
 // A SIF is the one part of a tool that belongs in an object store: a single
-// immutable blob. Its data dir is the opposite and stays local.
+// The layout is load-bearing: the storage browser attributes an object to a
+// source by its <name>/<version>/ prefix, so an image parked under images/…
+// is uploaded and then invisible — which is what happened to a 1.5 GB VEP image
+// and a 35 GB setup archive.
 func TestToolImageObject(t *testing.T) {
 	vep := Tool{Name: "vep", Version: "115", Image: "docker://ensemblorg/ensembl-vep:release_115.0"}
 
 	remote := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "s3://vh-sources/prod"}
 	remote.SetBaseDir("/etc/varhub")
-	if want, got := "s3://vh-sources/prod/images/vep/115/vep.sif", remote.ToolImageObject(vep); got != want {
+	if want, got := "s3://vh-sources/prod/vep/115/image/vep.sif", remote.ToolImageObject(vep); got != want {
 		t.Errorf("ToolImageObject = %q, want %q", got, want)
 	}
 	// The local path it is fetched to stays local, and the two are different
@@ -1460,11 +1463,18 @@ func TestSnapshotResolvesReferenceFromPinnedSource(t *testing.T) {
 		t.Errorf("error does not name the cause: %v", err)
 	}
 
-	// An unmet requirement is caught when the snapshot is assembled, not when a
-	// job eventually runs against it.
-	if _, err = cfg.LoadSnapshot("noref"); err == nil {
-		t.Error("a snapshot pinning a requires_reference source without one was accepted")
-	} else if !strings.Contains(err.Error(), "requires a reference") {
-		t.Errorf("error does not name the cause: %v", err)
+	// A snapshot with no reference still loads — provisioning a tool fetches an
+	// image and runs an installer, and does not open a genome. The requirement
+	// is reported for the annotate path to enforce.
+	bare, err := cfg.LoadSnapshot("noref")
+	if err != nil {
+		t.Fatalf("a snapshot without a reference must still load, so that a tool "+
+			"can be downloaded before one is registered: %v", err)
+	}
+	if got := bare.RequiresMissingReference(); got != "vep:113" {
+		t.Errorf("RequiresMissingReference = %q, want vep:113", got)
+	}
+	if got := snap.RequiresMissingReference(); got != "" {
+		t.Errorf("a snapshot with a reference reported %q missing", got)
 	}
 }

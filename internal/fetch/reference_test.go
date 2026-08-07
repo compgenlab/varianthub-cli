@@ -142,3 +142,33 @@ func TestFetchReferenceCompressesPlainFasta(t *testing.T) {
 		t.Fatalf("plain FASTA was not recompressed: kind=%v err=%v path=%s", k, err, path)
 	}
 }
+
+// A download job runs Snapshot(), not Source(), and the two used to disagree:
+// the reference fork lived only in Source(), so a real download handed the FASTA
+// to tabix and failed with "bgzf: FEXTRA flag not set" — a message that says
+// nothing about references and sent the reader to the wrong code entirely.
+func TestSnapshotProvisionsReferencesNotViaTabix(t *testing.T) {
+	var gzBody strings.Builder
+	zw := gzip.NewWriter(&gzBody)
+	zw.Write([]byte(referenceFasta()))
+	zw.Close()
+
+	cfg, src := refHome(t, []byte(gzBody.String()), "GRCh38.fa.gz")
+	snap := &config.Snapshot{Name: "s", Assembly: "GRCh38", Sources: []config.Source{src}}
+
+	results, err := Snapshot(context.Background(), cfg, snap, "", false, true, 1)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Index != "built" {
+		t.Errorf("Index = %q, want built (a reference is faidx-indexed, not tabix)",
+			results[0].Index)
+	}
+	path := cfg.ResolveSourceTargets(src)[0].Path
+	if _, err := os.Stat(path + ".fai"); err != nil {
+		t.Errorf("no .fai after a snapshot download: %v", err)
+	}
+}

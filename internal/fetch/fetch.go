@@ -142,7 +142,7 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		results []fileResult // one per file (distinct indices ⇒ safe concurrent writes)
 	}
 	var works []*work
-	var builds, tools, remoteGTFs, streamed []config.Source
+	var builds, tools, remoteGTFs, streamed, references []config.Source
 	matched := false
 	for _, s := range snap.Sources {
 		if s.IsBuiltinSource() {
@@ -164,6 +164,15 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		}
 		if s.Build != nil { // built from a recipe, run sequentially below
 			builds = append(builds, s)
+			continue
+		}
+		if s.IsReference() {
+			// Indexed by sequence offset rather than by coordinate, and always
+			// local. Classified here rather than only in Source(), because this
+			// is the path a download job actually takes — the generic branch
+			// below hands the FASTA to tabix, which fails with "FEXTRA flag not
+			// set" and says nothing about references.
+			references = append(references, s)
 			continue
 		}
 		if remoteCache && s.IsGTFSource() {
@@ -200,9 +209,16 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs)+len(streamed))
+	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs)+len(streamed)+len(references))
 	for _, s := range streamed {
 		results = append(results, Result{Source: s.ID(), Data: "streamed", Index: "remote"})
+	}
+	for _, s := range references {
+		r, err := fetchReference(ctx, cfg, s, force)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
 	}
 	for _, s := range remoteGTFs {
 		r, err := fetchGTFRemote(ctx, cfg, s, force, keepRaw)

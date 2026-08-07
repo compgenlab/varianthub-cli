@@ -54,14 +54,11 @@ func Build(path string) ([]Entry, error) {
 
 	var entries []Entry
 	if bytes.Equal(magic, []byte{0x1f, 0x8b}) {
-		blocks, r, err := bgzfStream(f)
-		if err != nil {
+		ir := newIndexingReader(f)
+		if entries, err = index(ir); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		if entries, err = index(r); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
-		if err := writeGZI(path+".gzi", blocks()); err != nil {
+		if err := writeGZI(path+".gzi", ir.blocks); err != nil {
 			return nil, err
 		}
 	} else if entries, err = index(f); err != nil {
@@ -78,74 +75,102 @@ func Build(path string) ([]Entry, error) {
 // uncompressed offset its first byte carries.
 type block struct{ compressed, uncompressed int64 }
 
-// bgzfStream decompresses a BGZF file, recording block boundaries as it goes.
+// indexingReader decompresses a BGZF stream, recording block boundaries as it
+// goes.
 //
-// The blocks are walked directly rather than through a bgzf.Reader because the
-// boundaries are the point: a .gzi is exactly the list of them, and a reader
-// that hides them cannot produce one.
-func bgzfStream(f *os.File) (func() []block, io.Reader, error) {
-	var (
-		blocks   []block
-		coffset  int64
-		uoffset  int64
-		out      bytes.Buffer
-		hdr      = make([]byte, 18)
-		firstRun = true
-	)
-	br := bufio.NewReaderSize(f, 1<<20)
-	for {
-		n, err := io.ReadFull(br, hdr)
-		if err == io.EOF || (err == io.ErrUnexpectedEOF && n == 0) {
-			break
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("read block header: %w", err)
-		}
-		if hdr[0] != 0x1f || hdr[1] != 0x8b {
-			return nil, nil, fmt.Errorf("not BGZF: block at %d has no gzip magic", coffset)
-		}
-		if hdr[3]&0x04 == 0 {
-			return nil, nil, fmt.Errorf("not BGZF: plain gzip — recompress with `varhub bgzip`")
-		}
-		// The BC subfield carries BSIZE-1, the total block length. It is the
-		// first extra subfield in every BGZF block htslib writes, which is what
-		// the fixed 18-byte header read above assumes.
-		if hdr[12] != 'B' || hdr[13] != 'C' {
-			return nil, nil, fmt.Errorf("not BGZF: block at %d has no BC subfield", coffset)
-		}
-		bsize := int(binary.LittleEndian.Uint16(hdr[16:18])) + 1
+// A reader rather than a buffer: this indexes genomes, and holding the
+// decompressed stream to find boundaries is ~3 GB for GRCh38 — which is how the
+// worker got OOM-killed. Memory here is one block at a time.
+type indexingReader struct {
+	br      *bufio.Reader
+	blocks  []block
+	buf     []byte
+	coffset int64
+	uoffset int64
+	first   bool
+	done    bool
+	err     error
+}
 
-		rest := make([]byte, bsize-18)
-		if _, err := io.ReadFull(br, rest); err != nil {
-			return nil, nil, fmt.Errorf("read block at %d: %w", coffset, err)
-		}
-		zr, err := gzip.NewReader(bytes.NewReader(append(append([]byte{}, hdr...), rest...)))
-		if err != nil {
-			return nil, nil, fmt.Errorf("block at %d: %w", coffset, err)
-		}
-		data, err := io.ReadAll(zr)
-		zr.Close()
-		if err != nil {
-			return nil, nil, fmt.Errorf("block at %d: %w", coffset, err)
-		}
-		// The BGZF EOF marker is an empty block, and it indexes nothing: htslib
-		// stops before it, so counting it produces a .gzi one entry longer than
-		// every reader expects.
-		if len(data) == 0 {
-			break
-		}
-		// The first block is implicit — a .gzi lists the ones after it, since
-		// (0,0) is where every reader already starts.
-		if !firstRun {
-			blocks = append(blocks, block{compressed: coffset, uncompressed: uoffset})
-		}
-		firstRun = false
+func newIndexingReader(r io.Reader) *indexingReader {
+	return &indexingReader{br: bufio.NewReaderSize(r, 1<<20), first: true}
+}
 
-		out.Write(data)
-		coffset += int64(bsize)
-		uoffset += int64(len(data))
+func (r *indexingReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		if r.done {
+			if r.err != nil {
+				return 0, r.err
+			}
+			return 0, io.EOF
+		}
+		if err := r.next(); err != nil {
+			r.done = true
+			if err != io.EOF {
+				r.err = err
+				return 0, err
+			}
+			return 0, io.EOF
+		}
 	}
-	return func() []block { return blocks }, bytes.NewReader(out.Bytes()), nil
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func (r *indexingReader) next() error {
+	hdr := make([]byte, 18)
+	n, err := io.ReadFull(r.br, hdr)
+	if err == io.EOF || (err == io.ErrUnexpectedEOF && n == 0) {
+		return io.EOF
+	}
+	if err != nil {
+		return fmt.Errorf("read block header at %d: %w", r.coffset, err)
+	}
+	if hdr[0] != 0x1f || hdr[1] != 0x8b {
+		return fmt.Errorf("not BGZF: block at %d has no gzip magic", r.coffset)
+	}
+	if hdr[3]&0x04 == 0 {
+		return fmt.Errorf("not BGZF: plain gzip — recompress with `varhub bgzip`")
+	}
+	// The BC subfield carries BSIZE-1, the total block length, and is the first
+	// extra subfield in every BGZF block — which is what the fixed 18-byte
+	// header read above assumes.
+	if hdr[12] != 'B' || hdr[13] != 'C' {
+		return fmt.Errorf("not BGZF: block at %d has no BC subfield", r.coffset)
+	}
+	bsize := int(binary.LittleEndian.Uint16(hdr[16:18])) + 1
+	if bsize <= 18 {
+		return fmt.Errorf("not BGZF: block at %d declares length %d", r.coffset, bsize)
+	}
+	rest := make([]byte, bsize-18)
+	if _, err := io.ReadFull(r.br, rest); err != nil {
+		return fmt.Errorf("read block at %d: %w", r.coffset, err)
+	}
+	whole := make([]byte, 0, bsize)
+	whole = append(append(whole, hdr...), rest...)
+
+	zr, err := gzip.NewReader(bytes.NewReader(whole))
+	if err != nil {
+		return fmt.Errorf("block at %d: %w", r.coffset, err)
+	}
+	data, err := io.ReadAll(zr)
+	zr.Close()
+	if err != nil {
+		return fmt.Errorf("block at %d: %w", r.coffset, err)
+	}
+	if len(data) == 0 {
+		return io.EOF // the EOF marker indexes nothing
+	}
+	if !r.first {
+		r.blocks = append(r.blocks, block{compressed: r.coffset, uncompressed: r.uoffset})
+	}
+	r.first = false
+
+	r.buf = data
+	r.coffset += int64(bsize)
+	r.uoffset += int64(len(data))
+	return nil
 }
 
 // index walks a FASTA and records where each sequence starts.
@@ -165,6 +190,12 @@ func index(r io.Reader) ([]Entry, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
 	for {
 		line, err := br.ReadBytes('\n')
+		// A read error is not end-of-input: treating them alike turns a
+		// truncated stream into a short index that looks complete, and swallows
+		// "this is not BGZF" entirely.
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
 		if len(line) == 0 && err != nil {
 			break
 		}

@@ -1,0 +1,144 @@
+package fetch
+
+import (
+	"compress/gzip"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/compgenlab/cghts/seqio"
+	"github.com/compgenlab/varianthub-cli/internal/config"
+)
+
+func referenceFasta() string {
+	var b strings.Builder
+	line := strings.Repeat("ACGT", 15)
+	for _, c := range []string{"chr1", "chr2"} {
+		b.WriteString(">" + c + " test\n")
+		for i := 0; i < 40; i++ {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteString("ACGTACGT\n")
+	}
+	return b.String()
+}
+
+// refHome builds a config home with one reference source served over HTTP.
+func refHome(t *testing.T, body []byte, name string) (*config.Config, config.Source) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	home := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.toml", "data_dir = \""+home+"/data\"\ncache_dir = \""+home+"/cache\"\n"+
+		"annotations_dir = \""+home+"/annotations\"\n")
+	write("annotations/sources/GRCh38/1/GRCh38-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38\"\nversion=\"1\"\nassembly=\"GRCh38\"\n"+
+			"url=\""+srv.URL+"/"+name+"\"\n")
+	write("annotations/snapshots/s.toml", "assembly=\"GRCh38\"\nsources=[\"GRCh38:1\"]\n")
+
+	cfg, err := config.Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, snap.Sources[0]
+}
+
+// The references people publish are plain gzip, which faidx cannot index. A
+// provisioned reference has to end up BGZF with a .fai beside it, or the failure
+// lands inside a container as "Cannot index files compressed with gzip".
+func TestFetchReferenceRecompressesAndIndexes(t *testing.T) {
+	var gzBody strings.Builder
+	zw := gzip.NewWriter(&gzBody) // plain gzip: no BGZF extra field
+	zw.Write([]byte(referenceFasta()))
+	zw.Close()
+
+	cfg, src := refHome(t, []byte(gzBody.String()), "GRCh38.fa.gz")
+	res, err := fetchReference(context.Background(), cfg, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != "built" {
+		t.Errorf("Index = %q, want built", res.Index)
+	}
+
+	path := cfg.ResolveSourceTargets(src)[0].Path
+	if k, err := compressionOf(path); err != nil || k != compBGZF {
+		t.Fatalf("provisioned file is not BGZF: kind=%v err=%v", k, err)
+	}
+	if _, err := os.Stat(path + ".fai"); err != nil {
+		t.Errorf("no .fai: %v", err)
+	}
+	if _, err := os.Stat(path + ".gzi"); err != nil {
+		t.Errorf("no .gzi (BGZF needs one to seek by uncompressed offset): %v", err)
+	}
+
+	// The point of indexing is random access, so read through it.
+	r, err := seqio.NewIndexedFastaReader(path)
+	if err != nil {
+		t.Fatalf("the provisioned reference is not readable: %v", err)
+	}
+	defer r.Close()
+	got, err := r.GetSequenceRange("chr2", 0, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ToUpper(string(got)) != "ACGT" {
+		t.Errorf("chr2:0-4 = %q, want ACGT", got)
+	}
+}
+
+// A second run must not re-download and re-index a reference that is already
+// prepared — it is most of a gigabyte.
+func TestFetchReferenceSkipsWhenPrepared(t *testing.T) {
+	var gzBody strings.Builder
+	zw := gzip.NewWriter(&gzBody)
+	zw.Write([]byte(referenceFasta()))
+	zw.Close()
+
+	cfg, src := refHome(t, []byte(gzBody.String()), "GRCh38.fa.gz")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := fetchReference(context.Background(), cfg, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Data != "skipped" {
+		t.Errorf("Data = %q on a second run, want skipped", res.Data)
+	}
+}
+
+// An uncompressed FASTA is recompressed too: BGZF is what makes the .gzi
+// meaningful, and a reference is large enough that leaving it uncompressed costs
+// real disk.
+func TestFetchReferenceCompressesPlainFasta(t *testing.T) {
+	cfg, src := refHome(t, []byte(referenceFasta()), "GRCh38.fa")
+	if _, err := fetchReference(context.Background(), cfg, src, false); err != nil {
+		t.Fatal(err)
+	}
+	path := cfg.ResolveSourceTargets(src)[0].Path + ".gz"
+	if k, err := compressionOf(path); err != nil || k != compBGZF {
+		t.Fatalf("plain FASTA was not recompressed: kind=%v err=%v path=%s", k, err, path)
+	}
+}

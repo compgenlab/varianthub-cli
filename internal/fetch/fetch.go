@@ -579,6 +579,11 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
 		return Result{}, err
 	}
+	if src.IsReference() {
+		// Indexed by sequence offset rather than by coordinate, and always
+		// local: a tool step binds the FASTA's directory into a container.
+		return fetchReference(ctx, cfg, src, force)
+	}
 	if objstore.IsObject(cfg.CacheDirAbs()) && src.IsGTFSource() {
 		return fetchGTFRemote(ctx, cfg, src, force, keepRaw)
 	}

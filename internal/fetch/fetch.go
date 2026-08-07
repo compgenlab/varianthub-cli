@@ -142,7 +142,7 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		results []fileResult // one per file (distinct indices ⇒ safe concurrent writes)
 	}
 	var works []*work
-	var builds, tools, remoteGTFs, streamed []config.Source
+	var builds, tools, remoteGTFs, streamed, references []config.Source
 	matched := false
 	for _, s := range snap.Sources {
 		if s.IsBuiltinSource() {
@@ -164,6 +164,15 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		}
 		if s.Build != nil { // built from a recipe, run sequentially below
 			builds = append(builds, s)
+			continue
+		}
+		if s.IsReference() {
+			// Indexed by sequence offset rather than by coordinate, and always
+			// local. Classified here rather than only in Source(), because this
+			// is the path a download job actually takes — the generic branch
+			// below hands the FASTA to tabix, which fails with "FEXTRA flag not
+			// set" and says nothing about references.
+			references = append(references, s)
 			continue
 		}
 		if remoteCache && s.IsGTFSource() {
@@ -200,9 +209,16 @@ func Snapshot(ctx context.Context, cfg *config.Config, snap *config.Snapshot, on
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs)+len(streamed))
+	results := make([]Result, 0, len(works)+len(builds)+len(tools)+len(remoteGTFs)+len(streamed)+len(references))
 	for _, s := range streamed {
 		results = append(results, Result{Source: s.ID(), Data: "streamed", Index: "remote"})
+	}
+	for _, s := range references {
+		r, err := fetchReference(ctx, cfg, s, force)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
 	}
 	for _, s := range remoteGTFs {
 		r, err := fetchGTFRemote(ctx, cfg, s, force, keepRaw)
@@ -429,7 +445,12 @@ func aggregate(src config.Source, results []fileResult) Result {
 // unless force. `ref` is the snapshot's reference FASTA. Called by Snapshot.
 func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source, ref string, force bool) (Result, error) {
 	t := src.AsTool() // execution view
-	res := Result{Source: t.ID() + " (tool)", Data: "-", Index: "-"}
+	// Source is an identity, not a label: the JSON output looks results up by it
+	// to attach each source's file inventory. It used to carry a " (tool)"
+	// suffix for the text listing, so the lookup never matched and no tool ever
+	// reported its files — which is why a 35 GB setup archive and a 1.5 GB image
+	// were invisible in the storage browser and missing from the metrics.
+	res := Result{Source: t.ID(), Data: "-", Index: "-"}
 
 	if err := software.Check(t.ID(), t.RequiredSoftware()); err != nil {
 		return res, err
@@ -578,6 +599,11 @@ func Source(ctx context.Context, cfg *config.Config, src config.Source, force, k
 	}
 	if err := checkRemoteReady(ctx, cfg.CacheDirAbs()); err != nil {
 		return Result{}, err
+	}
+	if src.IsReference() {
+		// Indexed by sequence offset rather than by coordinate, and always
+		// local: a tool step binds the FASTA's directory into a container.
+		return fetchReference(ctx, cfg, src, force)
 	}
 	if objstore.IsObject(cfg.CacheDirAbs()) && src.IsGTFSource() {
 		return fetchGTFRemote(ctx, cfg, src, force, keepRaw)
@@ -770,7 +796,13 @@ func Missing(cfg *config.Config, src config.Source) []string {
 		}
 		return missing
 	}
-	if objstore.IsObject(cfg.CacheDirAbs()) {
+	// Which check to run follows the *files*, not the cache directory. A source
+	// can resolve somewhere other than cache_dir — an overlay names its own root,
+	// which is how one job reads sources from several places — so deciding from
+	// cache_dir alone tests an s3:// locator with os.Stat and calls a perfectly
+	// good source missing. That reads as "sources not downloaded" naming an
+	// object that is plainly there.
+	if objstore.IsObject(cfg.CacheDirAbs()) || resolvesToObject(cfg, src) {
 		return missingRemote(context.Background(), cfg, src)
 	}
 	var missing []string
@@ -1415,6 +1447,17 @@ func pruneRawGTFRemote(ctx context.Context, raw, idx string) (int64, error) {
 // else needs data plus an index. A locator that cannot be reached is reported
 // as missing with the reason attached, because "run `varhub download`" is the
 // wrong advice when the real problem is a bad endpoint or expired credentials.
+// resolvesToObject reports whether a source's files live in an object store,
+// whatever the cache directory happens to be.
+func resolvesToObject(cfg *config.Config, src config.Source) bool {
+	for _, f := range cfg.ResolveSourceFiles(src) {
+		if objstore.IsObject(f.Path) {
+			return true
+		}
+	}
+	return false
+}
+
 func missingRemote(ctx context.Context, cfg *config.Config, src config.Source) []string {
 	var missing []string
 	note := func(loc string, err error) { missing = append(missing, fmt.Sprintf("%s (%v)", loc, err)) }

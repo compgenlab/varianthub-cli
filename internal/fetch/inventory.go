@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
 	"strings"
 
 	"github.com/compgenlab/varianthub-cli/internal/config"
@@ -38,8 +39,14 @@ func Inventory(ctx context.Context, cfg *config.Config, src config.Source) ([]Fi
 		return nil
 	}
 
-	// The data files, each with whichever index sits beside it.
+	// The data files, each with whichever index sits beside it. A reference is
+	// handled below instead: its store copy is the recompressed BGZF file, under
+	// a different name than the download, with .fai/.gzi rather than tabix
+	// sidecars — listing it here too would double-count it.
 	for _, f := range cfg.ResolveSourceFiles(src) {
+		if src.IsReference() {
+			break
+		}
 		if f.Local {
 			continue // a localpath source is used in place, not cached
 		}
@@ -49,6 +56,41 @@ func Inventory(ctx context.Context, cfg *config.Config, src config.Source) ([]Fi
 		for _, ext := range []string{".tbi", ".csi"} {
 			if err := add(f.Path + ext); err != nil {
 				return nil, err
+			}
+		}
+	}
+
+	// A tool's archived setup output. It is a real object in the store, several
+	// tens of gigabytes for VEP, and until now it appeared in no listing: the
+	// storage browser showed nothing and the metrics page under-reported by the
+	// largest single thing in the bucket.
+	if src.IsTool() {
+		if obj := toolDataObject(cfg, src.AsTool()); obj != "" {
+			if err := add(obj); err != nil {
+				return nil, err
+			}
+		}
+		if img := cfg.ToolImageObject(src.AsTool()); img != "" {
+			if err := add(img); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// A reference's durable copy and its indexes. The working copy is local and
+	// is not in the store, so it is not listed here — this is what the store
+	// actually holds.
+	if src.IsReference() {
+		base := objstore.Join(root, src.Name, src.Version)
+		for _, f := range cfg.ResolveSourceFiles(src) {
+			name := objstore.Base(f.Path)
+			if !strings.HasSuffix(name, ".gz") {
+				name += ".gz" // provisioning recompresses to BGZF
+			}
+			for _, ext := range []string{"", ".fai", ".gzi"} {
+				if err := add(objstore.Join(base, name+ext)); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

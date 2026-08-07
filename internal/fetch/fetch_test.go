@@ -239,7 +239,7 @@ func TestToolsOnlyFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 1 || res[0].Source != "vep:112 (tool)" {
+	if len(res) != 1 || res[0].Source != "vep:112" {
 		t.Fatalf("only=vep ran %+v, want just vep:112", res)
 	}
 	if fileExists(filepath.Join(cfg.ResolveToolData(rel.Sources[1].AsTool()), "installed")) {

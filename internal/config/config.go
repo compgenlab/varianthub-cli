@@ -324,6 +324,15 @@ type Source struct {
 	// fetched whole and the data by range request.
 	Stream bool `toml:"stream,omitempty"`
 
+	// RequiresReference marks a source that cannot work without a reference
+	// genome — VEP's --fasta, or a builtin computing trinucleotide context.
+	//
+	// Declared rather than inferred, and checked when a snapshot is assembled:
+	// an unmet requirement is otherwise invisible until {ref} renders empty and
+	// the tool fails on a mangled command line, which reads as a flag problem
+	// and says nothing about a missing genome.
+	RequiresReference bool `toml:"requires_reference,omitempty"`
+
 	// locations is the overlay recording where this source's data was actually
 	// provisioned. Attached at load time; not part of the manifest.
 	locations *Locations
@@ -505,6 +514,15 @@ func (s Source) ID() string { return s.Name + ":" + s.Version }
 
 // IsBuiltinSource reports whether this is a built-in-annotator container.
 func (s Source) IsBuiltinSource() bool { return s.Type == "builtin" }
+
+// IsReference reports whether this source is a reference genome.
+//
+// A reference is a source like any other — versioned, assembly-scoped, fetched
+// and indexed by the same machinery, pinned by a snapshot so a run stays
+// reproducible when a newer patch release appears. It differs in being read by
+// path rather than queried by locus: it contributes no annotations of its own,
+// and a tool step opens it through {ref}.
+func (s Source) IsReference() bool { return s.Type == "reference" }
 
 // IsGTFSource reports whether this is a GTF gene-annotation source. A GTF source
 // is read into memory (no tabix index) and exposes a fixed vocabulary of derived
@@ -1307,9 +1325,15 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 		Name: name, Title: mc.Title, Description: mc.Description, Defaults: mc.Defaults,
 		Assembly: mc.Assembly,
 	}
-	// The reference FASTA is looked up from the global config by the snapshot's
-	// assembly ([references.<assembly>]) — it is not pinned in the manifest.
-	snap.Reference = c.ReferenceFor(snap.Assembly)
+	// The reference FASTA comes from the reference source this snapshot pins,
+	// resolved after the sources are loaded below. Configuration is consulted
+	// only as a fallback, for a deployment that placed a FASTA on the host by
+	// other means.
+	//
+	// Pinned rather than global because a reference has versions — GRCh38.p13
+	// and p14 are different genomes — and a snapshot exists to make a run
+	// reproducible. A global lookup would silently change what an old snapshot
+	// resolves to the moment a newer patch was registered.
 
 	for _, ref := range mc.Sources {
 		n, v, err := resolveRef(c.SourcesPath(), ref)
@@ -1352,7 +1376,79 @@ func (c *Config) LoadSnapshot(name string) (*Snapshot, error) {
 	if err := c.verifyAssembly(snap); err != nil {
 		return nil, fmt.Errorf("snapshot %q: %w", name, err)
 	}
+	if err := c.resolveReference(snap); err != nil {
+		return nil, fmt.Errorf("snapshot %q: %w", name, err)
+	}
 	return snap, nil
+}
+
+// resolveReference sets snap.Reference from the reference source the snapshot
+// pins, and checks that anything needing one has it.
+//
+// At most one, because {ref} has to have a single answer: two reference sources
+// would make "the genome for this run" ambiguous, and annotating against the
+// wrong one produces plausible values at coordinates that mean something else —
+// the failure that is invisible in the output.
+func (c *Config) resolveReference(snap *Snapshot) error {
+	var pinned *Source
+	for i := range snap.Sources {
+		if !snap.Sources[i].IsReference() {
+			continue
+		}
+		if pinned != nil {
+			return fmt.Errorf("pins two reference genomes (%s and %s); a snapshot may pin one",
+				pinned.ID(), snap.Sources[i].ID())
+		}
+		pinned = &snap.Sources[i]
+	}
+
+	if pinned != nil {
+		files := c.ResolveSourceFiles(*pinned)
+		if len(files) == 0 {
+			return fmt.Errorf("reference %s resolves to no file", pinned.ID())
+		}
+		// The local working copy, not wherever the deployment's storage is: a
+		// tool binds this file's directory into a container. ResolveReferencePath
+		// is the same answer fetch used when it put the file there, and the two
+		// disagreeing would mean provisioning succeeded and {ref} still pointed
+		// at nothing.
+		base := filepath.Base(files[0].Path)
+		if !strings.HasSuffix(base, ".gz") {
+			// Provisioning recompresses to BGZF, so that is the file that exists.
+			base += ".gz"
+		}
+		snap.Reference = c.ResolveReferencePath(*pinned, base)
+	} else {
+		// A deployment that placed a FASTA on the host by other means.
+		snap.Reference = c.ReferenceFor(snap.Assembly)
+	}
+
+	return nil
+}
+
+// RequiresMissingReference names a source that needs a reference genome when the
+// snapshot pins none, or "" when everything it needs is present.
+//
+// Checked where a tool is about to run rather than at load, because the two are
+// different questions. Provisioning a tool fetches an image and runs its
+// installer; it does not open a genome, and refusing to download VEP because no
+// FASTA is registered yet would make the order of setup steps matter for no
+// reason. Annotating with it does open one, and there the requirement is real.
+//
+// The failure it replaces is worth stating: {ref} renders empty, the tool gets
+// "--fasta --fork 4", and VEP reports "Unexpected extra command-line
+// parameter(s): 4" — a message about argument parsing that says nothing about a
+// missing genome.
+func (snap *Snapshot) RequiresMissingReference() string {
+	if snap.Reference != "" {
+		return ""
+	}
+	for _, src := range snap.Sources {
+		if src.RequiresReference {
+			return src.ID()
+		}
+	}
+	return ""
 }
 
 // verifyAssembly rejects any source whose declared assembly differs from the
@@ -1383,6 +1479,20 @@ func (snap *Snapshot) validate() error {
 				return err
 			}
 			continue
+		}
+		if s.IsReference() {
+			// A tool step binds the FASTA's directory into its container, so
+			// this is the one source that must exist as a local file at run
+			// time however the rest are read. Streaming it would render {ref}
+			// as an s3:// locator that no tool can open.
+			if s.Stream {
+				return fmt.Errorf("reference %s cannot be streamed: a tool opens it by path",
+					s.ID())
+			}
+			if len(s.Annotations) > 0 {
+				return fmt.Errorf("reference %s declares annotations; a reference is read by "+
+					"path and contributes none", s.ID())
+			}
 		}
 		if s.Name == "" || s.Version == "" {
 			return fmt.Errorf("each source needs a name and version")
@@ -1731,7 +1841,11 @@ func (c *Config) ToolImageObject(t Tool) string {
 	if !objstore.IsRemote(cd) {
 		return ""
 	}
-	return objstore.Join(cd, "images", t.Name, t.Version, filepath.Base(c.ResolveToolImage(t)))
+	// Under <name>/<version>/ like every other file a source owns. It used to
+	// live at images/<name>/<version>/, which the storage browser attributes by
+	// prefix and therefore never tied to its source — so a 1.5 GB image was
+	// uploaded and then invisible, the same way the setup archive was.
+	return objstore.Join(cd, t.Name, t.Version, "image", filepath.Base(c.ResolveToolImage(t)))
 }
 
 // ResolveToolData returns the tool's persistent data dir (<name>/<version>, matching
@@ -1740,6 +1854,20 @@ func (c *Config) ToolImageObject(t Tool) string {
 // appears as a ":" in a filesystem path.
 func (c *Config) ResolveToolData(t Tool) string {
 	return filepath.Join(c.toolBase(), "tools", t.Name, t.Version)
+}
+
+// ResolveReferencePath is where a reference genome lives on this machine.
+//
+// Under the tool base, not the cache directory, and for the same reason tool
+// data is: a tool step binds the file's directory into a container, so it has to
+// be a real path even when the deployment's storage is a bucket. Resolving it
+// against cache_dir gives an s3:// locator that nothing can open.
+//
+// The storage location a job names governs where the *durable* copy is kept, so
+// another machine can restore rather than re-fetch and re-index. It never
+// governs where the working copy lives, because there is no choice about that.
+func (c *Config) ResolveReferencePath(src Source, basename string) string {
+	return filepath.Join(c.toolBase(), "references", src.Name, src.Version, basename)
 }
 
 // MustExist returns a helpful error if the config file is missing.

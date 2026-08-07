@@ -140,6 +140,15 @@ func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Sn
 	}
 	var toolSrcs []config.Source
 	if tools := ReferencedTools(snap, selected); len(tools) > 0 && (toolStore != nil || skipToolCache) {
+		// Checked here, where a tool is about to run and actually needs the
+		// genome. {ref} would otherwise render empty and the tool would fail on
+		// a mangled command line — VEP reports "Unexpected extra command-line
+		// parameter(s)" because --fasta swallows the next flag, which says
+		// nothing about a missing reference.
+		if id := snap.RequiresMissingReference(); id != "" {
+			return nil, cleanup, fmt.Errorf("source %s requires a reference genome for %s, "+
+				"but the snapshot pins none", id, snap.Assembly)
+		}
 		if toolStore != nil {
 			if err := toolStore.Init(ctx); err != nil {
 				return nil, cleanup, err

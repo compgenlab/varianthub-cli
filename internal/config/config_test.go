@@ -997,13 +997,16 @@ func TestToolPathsStayLocal(t *testing.T) {
 }
 
 // A SIF is the one part of a tool that belongs in an object store: a single
-// immutable blob. Its data dir is the opposite and stays local.
+// The layout is load-bearing: the storage browser attributes an object to a
+// source by its <name>/<version>/ prefix, so an image parked under images/…
+// is uploaded and then invisible — which is what happened to a 1.5 GB VEP image
+// and a 35 GB setup archive.
 func TestToolImageObject(t *testing.T) {
 	vep := Tool{Name: "vep", Version: "115", Image: "docker://ensemblorg/ensembl-vep:release_115.0"}
 
 	remote := &Config{DataDir: "/var/lib/varhub/data", CacheDir: "s3://vh-sources/prod"}
 	remote.SetBaseDir("/etc/varhub")
-	if want, got := "s3://vh-sources/prod/images/vep/115/vep.sif", remote.ToolImageObject(vep); got != want {
+	if want, got := "s3://vh-sources/prod/vep/115/image/vep.sif", remote.ToolImageObject(vep); got != want {
 		t.Errorf("ToolImageObject = %q, want %q", got, want)
 	}
 	// The local path it is fetched to stays local, and the two are different
@@ -1398,5 +1401,80 @@ annotation_prefix = "VEP_"
 	got = load()
 	if got[0].Name != "Consequence" || got[0].FieldName() != "VEP_Consequence" {
 		t.Errorf(`with "-": name=%q field=%q`, got[0].Name, got[0].FieldName())
+	}
+}
+
+// A reference is a source, and a snapshot pins it — so {ref} is reproducible
+// rather than whatever the deployment happens to have configured today.
+func TestSnapshotResolvesReferenceFromPinnedSource(t *testing.T) {
+	home := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.toml", "data_dir = \""+home+"/data\"\ncache_dir = \""+home+"/cache\"\n"+
+		"annotations_dir = \""+home+"/annotations\"\n")
+	write("annotations/sources/GRCh38.p14/1/GRCh38.p14-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38.p14\"\nversion=\"1\"\n"+
+			"assembly=\"GRCh38\"\nurl=\"https://example.org/GRCh38.p14.fa.gz\"\n")
+	write("annotations/sources/vep/113/vep-113.toml",
+		"[[sources]]\ntype=\"tool\"\nname=\"vep\"\nversion=\"113\"\nassembly=\"GRCh38\"\n"+
+			"requires_reference=true\n"+
+			"  [[sources.steps]]\n  run=\"true\"\n"+
+			"  [[sources.annotations]]\n  name=\"VEP_X\"\n")
+	write("annotations/snapshots/withref.toml",
+		"assembly=\"GRCh38\"\nsources=[\"GRCh38.p14:1\",\"vep:113\"]\n")
+	write("annotations/snapshots/noref.toml",
+		"assembly=\"GRCh38\"\nsources=[\"vep:113\"]\n")
+
+	cfg, err := Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := cfg.LoadSnapshot("withref")
+	if err != nil {
+		t.Fatalf("snapshot with a pinned reference: %v", err)
+	}
+	if snap.Reference == "" {
+		t.Error("Reference is empty; {ref} would render as nothing and the tool " +
+			"would fail on a mangled command line")
+	}
+	if !strings.Contains(snap.Reference, "GRCh38.p14") {
+		t.Errorf("Reference = %q, want the pinned source's file", snap.Reference)
+	}
+
+	// Two references make "the genome for this run" ambiguous, and annotating
+	// against the wrong one gives plausible values at coordinates that mean
+	// something else — the failure that is invisible in the output.
+	write("annotations/sources/GRCh38.p13/1/GRCh38.p13-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38.p13\"\nversion=\"1\"\n"+
+			"assembly=\"GRCh38\"\nurl=\"https://example.org/GRCh38.p13.fa.gz\"\n")
+	write("annotations/snapshots/tworefs.toml",
+		"assembly=\"GRCh38\"\nsources=[\"GRCh38.p14:1\",\"GRCh38.p13:1\",\"vep:113\"]\n")
+	if _, err = cfg.LoadSnapshot("tworefs"); err == nil {
+		t.Error("a snapshot pinning two reference genomes was accepted")
+	} else if !strings.Contains(err.Error(), "two reference") {
+		t.Errorf("error does not name the cause: %v", err)
+	}
+
+	// A snapshot with no reference still loads — provisioning a tool fetches an
+	// image and runs an installer, and does not open a genome. The requirement
+	// is reported for the annotate path to enforce.
+	bare, err := cfg.LoadSnapshot("noref")
+	if err != nil {
+		t.Fatalf("a snapshot without a reference must still load, so that a tool "+
+			"can be downloaded before one is registered: %v", err)
+	}
+	if got := bare.RequiresMissingReference(); got != "vep:113" {
+		t.Errorf("RequiresMissingReference = %q, want vep:113", got)
+	}
+	if got := snap.RequiresMissingReference(); got != "" {
+		t.Errorf("a snapshot with a reference reported %q missing", got)
 	}
 }

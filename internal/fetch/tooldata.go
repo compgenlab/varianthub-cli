@@ -38,7 +38,11 @@ func toolDataObject(cfg *config.Config, t config.Tool) string {
 		// where another machine reading that path would look.
 		return ""
 	}
-	return objstore.Join(root, "tooldata", t.Name, t.Version+".tar.gz")
+	// Under <name>/<version>/ like every other file a source owns. It used to
+	// live at tooldata/<name>/<version>.tar.gz, which no listing recognised: the
+	// storage browser attributes objects by that prefix, so tens of gigabytes of
+	// VEP cache were invisible in the file list and missing from the metrics.
+	return objstore.Join(root, t.Name, t.Version, "tooldata.tar.gz")
 }
 
 // publishToolData archives a tool's data dir and uploads it.

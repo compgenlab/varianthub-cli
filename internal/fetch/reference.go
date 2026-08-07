@@ -38,13 +38,13 @@ func fetchReference(ctx context.Context, cfg *config.Config, src config.Source,
 		return res, fmt.Errorf("%s: a reference has exactly one file, found %d",
 			src.ID(), len(files))
 	}
+	// Always local, whatever the deployment's storage is: a tool step binds the
+	// FASTA's directory into a container. The storage location a job names
+	// governs the durable copy below, not this one — there is no choice about
+	// where the working copy lives.
+	local := cfg.ResolveReferencePath(src, objstore.Base(files[0].Path))
 	f := files[0]
-	if objstore.IsObject(f.Path) {
-		// Caught here rather than at annotate time, where it surfaces as a tool
-		// failing to open a path that is not a path.
-		return res, fmt.Errorf("%s: a reference must resolve to a local file, not %s "+
-			"(a tool opens it by path)", src.ID(), f.Path)
-	}
+	f.Path = local
 
 	prepared, indexed := f.Path, false
 	if !force {
@@ -81,7 +81,38 @@ func fetchReference(ctx context.Context, cfg *config.Config, src config.Source,
 	res.Index = "built"
 	logf("%s: indexed %d sequence(s)", src.ID(), len(entries))
 	_ = indexed
+
+	// A durable copy, so another machine unpacks what this one fetched,
+	// recompressed and indexed rather than repeating most of a gigabyte and a
+	// bgzip pass. Best effort: the reference is already usable here, and failing
+	// the download over the copy would discard work that went right.
+	if dst := cfg.CacheDirAbs(); objstore.IsObject(dst) {
+		if err := publishReference(ctx, prepared, dst, src); err != nil {
+			logf("%s: durable copy failed: %v", src.ID(), err)
+		} else {
+			logf("%s: durable copy kept", src.ID())
+		}
+	}
 	return res, nil
+}
+
+// publishReference uploads a prepared reference and its indexes.
+//
+// The indexes go too: rebuilding them is cheap but not free, and a copy that
+// restores to something a tool still has to index is only half a copy.
+func publishReference(ctx context.Context, local, cacheDir string, src config.Source) error {
+	// Under <name>/<version>/ like every other file a source owns, so the
+	// storage browser attributes it and the metrics count it.
+	base := objstore.Join(cacheDir, src.Name, src.Version)
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		if !fileExists(local + ext) {
+			continue // .gzi exists only for BGZF
+		}
+		if err := putObject(ctx, local+ext, objstore.Join(base, filepath.Base(local)+ext)); err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(local+ext), err)
+		}
+	}
+	return nil
 }
 
 // preparedReference reports the usable BGZF file for a reference, if it and its

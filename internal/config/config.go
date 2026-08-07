@@ -1407,7 +1407,17 @@ func (c *Config) resolveReference(snap *Snapshot) error {
 		if len(files) == 0 {
 			return fmt.Errorf("reference %s resolves to no file", pinned.ID())
 		}
-		snap.Reference = files[0].Path
+		// The local working copy, not wherever the deployment's storage is: a
+		// tool binds this file's directory into a container. ResolveReferencePath
+		// is the same answer fetch used when it put the file there, and the two
+		// disagreeing would mean provisioning succeeded and {ref} still pointed
+		// at nothing.
+		base := filepath.Base(files[0].Path)
+		if !strings.HasSuffix(base, ".gz") {
+			// Provisioning recompresses to BGZF, so that is the file that exists.
+			base += ".gz"
+		}
+		snap.Reference = c.ResolveReferencePath(*pinned, base)
 	} else {
 		// A deployment that placed a FASTA on the host by other means.
 		snap.Reference = c.ReferenceFor(snap.Assembly)
@@ -1827,6 +1837,20 @@ func (c *Config) ToolImageObject(t Tool) string {
 // appears as a ":" in a filesystem path.
 func (c *Config) ResolveToolData(t Tool) string {
 	return filepath.Join(c.toolBase(), "tools", t.Name, t.Version)
+}
+
+// ResolveReferencePath is where a reference genome lives on this machine.
+//
+// Under the tool base, not the cache directory, and for the same reason tool
+// data is: a tool step binds the file's directory into a container, so it has to
+// be a real path even when the deployment's storage is a bucket. Resolving it
+// against cache_dir gives an s3:// locator that nothing can open.
+//
+// The storage location a job names governs where the *durable* copy is kept, so
+// another machine can restore rather than re-fetch and re-index. It never
+// governs where the working copy lives, because there is no choice about that.
+func (c *Config) ResolveReferencePath(src Source, basename string) string {
+	return filepath.Join(c.toolBase(), "references", src.Name, src.Version, basename)
 }
 
 // MustExist returns a helpful error if the config file is missing.

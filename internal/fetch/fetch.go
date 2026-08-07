@@ -770,7 +770,13 @@ func Missing(cfg *config.Config, src config.Source) []string {
 		}
 		return missing
 	}
-	if objstore.IsObject(cfg.CacheDirAbs()) {
+	// Which check to run follows the *files*, not the cache directory. A source
+	// can resolve somewhere other than cache_dir — an overlay names its own root,
+	// which is how one job reads sources from several places — so deciding from
+	// cache_dir alone tests an s3:// locator with os.Stat and calls a perfectly
+	// good source missing. That reads as "sources not downloaded" naming an
+	// object that is plainly there.
+	if objstore.IsObject(cfg.CacheDirAbs()) || resolvesToObject(cfg, src) {
 		return missingRemote(context.Background(), cfg, src)
 	}
 	var missing []string
@@ -1415,6 +1421,17 @@ func pruneRawGTFRemote(ctx context.Context, raw, idx string) (int64, error) {
 // else needs data plus an index. A locator that cannot be reached is reported
 // as missing with the reason attached, because "run `varhub download`" is the
 // wrong advice when the real problem is a bad endpoint or expired credentials.
+// resolvesToObject reports whether a source's files live in an object store,
+// whatever the cache directory happens to be.
+func resolvesToObject(cfg *config.Config, src config.Source) bool {
+	for _, f := range cfg.ResolveSourceFiles(src) {
+		if objstore.IsObject(f.Path) {
+			return true
+		}
+	}
+	return false
+}
+
 func missingRemote(ctx context.Context, cfg *config.Config, src config.Source) []string {
 	var missing []string
 	note := func(loc string, err error) { missing = append(missing, fmt.Sprintf("%s (%v)", loc, err)) }

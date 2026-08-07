@@ -447,3 +447,68 @@ func hexSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// A source can live somewhere other than cache_dir, and the presence check has
+// to follow it.
+//
+// An overlay names a source's own root — that is how one job reads sources from
+// several places — so a job whose cache_dir is a local path can still hold a
+// source in a bucket. Choosing the check from cache_dir alone ran os.Stat on an
+// "s3://…" string, which is never a file, so a fully downloaded source was
+// reported as missing: "sources not downloaded — run `varhub download`:
+// REVEL:1.3 (missing s3://varhub-dev/REVEL/1.3/REVEL.tab.gz)", naming an object
+// that was plainly there.
+func TestMissingFollowsTheSourceNotTheCacheDir(t *testing.T) {
+	store := useStub(t)
+
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "config.toml")
+	// A LOCAL cache_dir: the case that misrouted the check.
+	if err := os.WriteFile(cfgPath, []byte(
+		"data_dir = \""+home+"/data\"\ncache_dir = \""+home+"/cache\"\n"+
+			"annotations_dir = \""+home+"/annotations\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.SourceDir("REVEL", "1.3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.SourceFile("REVEL", "1.3"), []byte(
+		"[[sources]]\nname=\"REVEL\"\nversion=\"1.3\"\nformat=\"tab\"\n"+
+			"url=\"https://example.org/REVEL.tab.gz\"\n"+
+			"  [[sources.annotations]]\n  name=\"REVEL\"\n  field=\"5\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The overlay puts this source in a bucket, while the cache stays local.
+	if err := os.WriteFile(cfg.LocationsPath("REVEL", "1.3"),
+		[]byte("root = \"s3://bucket\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.SnapshotsPath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.SnapshotFile("s"),
+		[]byte("assembly=\"GRCh38\"\nsources=[\"REVEL:1.3\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := cfg.LoadSnapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := snap.Sources[0]
+
+	// Nothing uploaded yet: still reported missing, so this is not just "never
+	// reports anything".
+	if m := Missing(cfg, src); len(m) == 0 {
+		t.Error("an empty bucket reported nothing missing")
+	}
+	store.objects["s3://bucket/REVEL/1.3/REVEL.tab.gz"] = []byte("data")
+	store.objects["s3://bucket/REVEL/1.3/REVEL.tab.gz.tbi"] = []byte("idx")
+
+	if m := Missing(cfg, src); len(m) != 0 {
+		t.Errorf("a downloaded source was reported missing: %v", m)
+	}
+}

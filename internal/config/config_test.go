@@ -1400,3 +1400,71 @@ annotation_prefix = "VEP_"
 		t.Errorf(`with "-": name=%q field=%q`, got[0].Name, got[0].FieldName())
 	}
 }
+
+// A reference is a source, and a snapshot pins it — so {ref} is reproducible
+// rather than whatever the deployment happens to have configured today.
+func TestSnapshotResolvesReferenceFromPinnedSource(t *testing.T) {
+	home := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.toml", "data_dir = \""+home+"/data\"\ncache_dir = \""+home+"/cache\"\n"+
+		"annotations_dir = \""+home+"/annotations\"\n")
+	write("annotations/sources/GRCh38.p14/1/GRCh38.p14-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38.p14\"\nversion=\"1\"\n"+
+			"assembly=\"GRCh38\"\nurl=\"https://example.org/GRCh38.p14.fa.gz\"\n")
+	write("annotations/sources/vep/113/vep-113.toml",
+		"[[sources]]\ntype=\"tool\"\nname=\"vep\"\nversion=\"113\"\nassembly=\"GRCh38\"\n"+
+			"requires_reference=true\n"+
+			"  [[sources.steps]]\n  run=\"true\"\n"+
+			"  [[sources.annotations]]\n  name=\"VEP_X\"\n")
+	write("annotations/snapshots/withref.toml",
+		"assembly=\"GRCh38\"\nsources=[\"GRCh38.p14:1\",\"vep:113\"]\n")
+	write("annotations/snapshots/noref.toml",
+		"assembly=\"GRCh38\"\nsources=[\"vep:113\"]\n")
+
+	cfg, err := Load(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := cfg.LoadSnapshot("withref")
+	if err != nil {
+		t.Fatalf("snapshot with a pinned reference: %v", err)
+	}
+	if snap.Reference == "" {
+		t.Error("Reference is empty; {ref} would render as nothing and the tool " +
+			"would fail on a mangled command line")
+	}
+	if !strings.Contains(snap.Reference, "GRCh38.p14") {
+		t.Errorf("Reference = %q, want the pinned source's file", snap.Reference)
+	}
+
+	// Two references make "the genome for this run" ambiguous, and annotating
+	// against the wrong one gives plausible values at coordinates that mean
+	// something else — the failure that is invisible in the output.
+	write("annotations/sources/GRCh38.p13/1/GRCh38.p13-1.toml",
+		"[[sources]]\ntype=\"reference\"\nname=\"GRCh38.p13\"\nversion=\"1\"\n"+
+			"assembly=\"GRCh38\"\nurl=\"https://example.org/GRCh38.p13.fa.gz\"\n")
+	write("annotations/snapshots/tworefs.toml",
+		"assembly=\"GRCh38\"\nsources=[\"GRCh38.p14:1\",\"GRCh38.p13:1\",\"vep:113\"]\n")
+	if _, err = cfg.LoadSnapshot("tworefs"); err == nil {
+		t.Error("a snapshot pinning two reference genomes was accepted")
+	} else if !strings.Contains(err.Error(), "two reference") {
+		t.Errorf("error does not name the cause: %v", err)
+	}
+
+	// An unmet requirement is caught when the snapshot is assembled, not when a
+	// job eventually runs against it.
+	if _, err = cfg.LoadSnapshot("noref"); err == nil {
+		t.Error("a snapshot pinning a requires_reference source without one was accepted")
+	} else if !strings.Contains(err.Error(), "requires a reference") {
+		t.Errorf("error does not name the cause: %v", err)
+	}
+}

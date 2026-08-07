@@ -123,6 +123,8 @@ func run(args []string) error {
 		return cmdEdit(*cfgPath, cmdArgs)
 	case "bgzip": // hidden: BGZF compress (mimics bgzip) for recipes/tool scripts
 		return cmdBgzip(cmdArgs)
+	case "faidx": // hidden: index a FASTA (mimics samtools faidx) for recipes/tool scripts
+		return cmdFaidx(cmdArgs)
 	case "tabix": // hidden: write a tabix index (mimics tabix) for recipes/tool scripts
 		return cmdTabix(cmdArgs)
 	case "vcf-merge": // combine same-order per-source VCFs (the annotate -t fan-out merge)

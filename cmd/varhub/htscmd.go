@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/compgenlab/varianthub-cli/internal/faidx"
 	"io"
 	"os"
 	"strings"
@@ -152,5 +153,33 @@ func cmdTabix(args []string) error {
 	if err := htsidx.WriteIndex(opts, rest[0]); err != nil {
 		return fmt.Errorf("tabix: %s: %w", rest[0], err)
 	}
+	return nil
+}
+
+// cmdFaidx writes the indexes a tool needs to random-access a FASTA: <file>.fai,
+// and <file>.gzi when the file is BGZF.
+//
+// Hidden, like bgzip and tabix, and for the same reason: a build recipe or a
+// setup step can index a reference without samtools installed, which keeps
+// htslib out of every image that provisions one.
+func cmdFaidx(args []string) error {
+	fs := flag.NewFlagSet("faidx", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: varhub faidx <file.fa|file.fa.gz>")
+		fmt.Fprintln(os.Stderr, "  writes <file>.fai, plus <file>.gzi when the input is BGZF.")
+		fmt.Fprintln(os.Stderr, "  a plain-gzip FASTA is refused: recompress with `varhub bgzip` first.")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("faidx: one FASTA argument is required")
+	}
+	entries, err := faidx.Build(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("faidx: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "faidx: indexed %d sequence(s) in %s\n", len(entries), fs.Arg(0))
 	return nil
 }

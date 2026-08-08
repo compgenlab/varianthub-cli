@@ -102,11 +102,40 @@ func restoreToolData(ctx context.Context, cfg *config.Config, t config.Tool, dat
 		logf("%s: could not fetch cached setup data: %v", t.ID(), err)
 		return false
 	}
-	if err := extractTarGz(tmp.Name(), datadir); err != nil {
-		// A half-unpacked directory is worse than none: the tool would find
-		// some of its data and fail somewhere deep inside itself.
+
+	// Unpack beside the data directory and move it into place, rather than
+	// unpacking into it.
+	//
+	// A half-unpacked directory is worse than none: the tool would find some of
+	// its data and fail somewhere deep inside itself. Cleaning that up used to
+	// mean removing datadir on error — which is safe only if this process is the
+	// only one that can see it. It isn't: a deployment sharing the directory
+	// between workers could have one delete the cache another was reading, and a
+	// failure here would take out a working install rather than just this
+	// attempt. Now a failure discards only the staging copy, and the live
+	// directory is never in a partial state at all — it goes from absent to
+	// complete in one rename.
+	//
+	// Callers hold the provisioning lock, so nothing else is staging or reading
+	// through the swap.
+	staging := datadir + ".restoring"
+	_ = os.RemoveAll(staging) // an earlier attempt that died before cleaning up
+	if err := extractTarGz(tmp.Name(), staging); err != nil {
 		logf("%s: could not unpack cached setup data: %v", t.ID(), err)
-		_ = os.RemoveAll(datadir)
+		_ = os.RemoveAll(staging)
+		return false
+	}
+	// Rename onto an existing directory fails, so clear whatever a previous
+	// interrupted run left. Reached only when the sentinel is absent, meaning
+	// nothing here is known-good.
+	if err := os.RemoveAll(datadir); err != nil {
+		logf("%s: could not clear the tool data directory: %v", t.ID(), err)
+		_ = os.RemoveAll(staging)
+		return false
+	}
+	if err := os.Rename(staging, datadir); err != nil {
+		logf("%s: could not install cached setup data: %v", t.ID(), err)
+		_ = os.RemoveAll(staging)
 		return false
 	}
 	return true

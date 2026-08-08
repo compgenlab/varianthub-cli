@@ -461,6 +461,26 @@ func setupToolSource(ctx context.Context, cfg *config.Config, src config.Source,
 		return res, err
 	}
 
+	// One lock over both halves, held until this tool is provisioned.
+	//
+	// The image needs it as much as the data does: `apptainer pull` removes the
+	// .sif before writing the new one, so a second process pulling the same tool
+	// deletes the image the first is about to run. Both live under the tool base,
+	// which is the directory a deployment shares between workers.
+	//
+	// Coarse on purpose. Every step here is idempotent and sentinel- or
+	// existence-gated, so a process that waits usually finds the work already
+	// done and returns immediately — waiting costs a second process nothing it
+	// wasn't going to spend, and the finer-grained alternative is two locks with
+	// an ordering to get wrong.
+	unlock, err := acquireProvisionLock(ctx, cfg.ResolveToolData(t), func(f string, a ...any) {
+		logf("%s: "+f, append([]any{t.ID()}, a...)...)
+	})
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+
 	// Acquire the image.
 	var img string
 	if t.Image != "" {

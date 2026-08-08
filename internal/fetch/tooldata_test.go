@@ -4,10 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/objstore"
 )
 
 // A tool's data dir survives the round trip: contents, layout, and the exec bit
@@ -129,5 +133,100 @@ func TestSafeJoin(t *testing.T) {
 	// A sibling directory sharing a prefix must not pass as "under" it.
 	if _, err := safeJoin("/tmp/dest", "../destevil/a.txt"); err == nil {
 		t.Error("safeJoin accepted a prefix-sharing sibling")
+	}
+}
+
+// A failed restore must leave an existing data directory alone.
+//
+// It used to remove datadir on a bad unpack. That is safe only when this process
+// is the sole reader — and the case the lock exists for is exactly the one where
+// it isn't: a shared directory where deleting it takes out an install another
+// process is using. The failure here should cost this attempt and nothing else.
+func TestFailedRestoreLeavesExistingDataIntact(t *testing.T) {
+	s := useStub(t)
+	base := t.TempDir()
+	cfg := &config.Config{DataDir: base, CacheDir: base}
+	cfg.SetBaseDir(base)
+
+	tool := config.Tool{Name: "vep", Version: "115", ToolCache: "s3://bucket/tools"}
+	obj := toolDataObject(cfg, tool)
+	if obj == "" {
+		t.Fatal("tool has no archive object")
+	}
+	// Not a gzip stream, so extraction fails partway through the restore.
+	ref, err := objstore.Parse(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.objects[ref.String()] = []byte("this is not a tarball")
+
+	// A complete install already on disk, as a second worker would have left it.
+	datadir := filepath.Join(base, "installed")
+	if err := os.MkdirAll(filepath.Join(datadir, "homo_sapiens"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(datadir, "homo_sapiens", "1.cache")
+	if err := os.WriteFile(keep, []byte("hours of work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if restoreToolData(context.Background(), cfg, tool, datadir, func(string, ...any) {}) {
+		t.Fatal("restore reported success on a corrupt archive")
+	}
+
+	body, err := os.ReadFile(keep)
+	if err != nil {
+		t.Fatalf("the existing install was destroyed by a failed restore: %v", err)
+	}
+	if string(body) != "hours of work" {
+		t.Errorf("existing file = %q, want it untouched", body)
+	}
+	// And no staging directory left lying around.
+	if _, err := os.Stat(datadir + ".restoring"); !os.IsNotExist(err) {
+		t.Errorf("staging directory survived the failure: %v", err)
+	}
+}
+
+// The live directory is never partially populated: it goes from absent to
+// complete. A reader that catches it mid-restore would otherwise find some of
+// the tool's data and fail deep inside the tool.
+func TestSuccessfulRestoreSwapsInAtomically(t *testing.T) {
+	s := useStub(t)
+	base := t.TempDir()
+	cfg := &config.Config{DataDir: base, CacheDir: base}
+	cfg.SetBaseDir(base)
+
+	tool := config.Tool{Name: "vep", Version: "115", ToolCache: "s3://bucket/tools"}
+
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "homo_sapiens"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "homo_sapiens", "1.cache"), []byte("restored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := writeTarGz(&buf, src); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := objstore.Parse(toolDataObject(cfg, tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.objects[ref.String()] = buf.Bytes()
+
+	datadir := filepath.Join(base, "installed")
+	if !restoreToolData(context.Background(), cfg, tool, datadir, func(string, ...any) {}) {
+		t.Fatal("restore failed")
+	}
+	body, err := os.ReadFile(filepath.Join(datadir, "homo_sapiens", "1.cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "restored" {
+		t.Errorf("content = %q", body)
+	}
+	if _, err := os.Stat(datadir + ".restoring"); !os.IsNotExist(err) {
+		t.Errorf("staging directory survived a successful restore: %v", err)
 	}
 }

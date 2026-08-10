@@ -66,6 +66,21 @@ func fetchReference(ctx context.Context, cfg *config.Config, src config.Source,
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return res, err
 	}
+
+	// Before going to the origin, try the durable copy this or another machine
+	// already prepared. It is the finished article — BGZF and indexed — so
+	// restoring skips a decompress, a bgzip pass and an index build as well as
+	// most of a gigabyte from someone else's server.
+	//
+	// Skipped under --force, which exists to say "ignore what is already there".
+	if !force {
+		if p, ok := restoreDurableReference(ctx, cfg, src, f.Path); ok {
+			res.Data, res.Index = "restored", "restored"
+			logf("%s: restored %s from the durable copy", src.ID(), filepath.Base(p))
+			return res, nil
+		}
+	}
+
 	sum, err := resolveChecksum(ctx, f.Checksum, filepath.Base(f.Path))
 	if err != nil {
 		return res, err
@@ -253,4 +268,127 @@ func compressionOf(path string) (compression, error) {
 		return compBGZF, nil
 	}
 	return compGzip, nil
+}
+
+// EnsureReference makes a pinned reference usable on this machine, restoring it
+// from the durable copy when the local working copy is absent.
+//
+// This is what the durable copy exists for. Provisioning writes the FASTA
+// locally and uploads a prepared copy, but {ref} is always a local path — a tool
+// step binds its directory into a container, which cannot read an object store.
+// So a worker that did not run the download has nothing to bind, and until this
+// existed nothing put it there: the upload had no reader, and a second replica
+// failed with a --fasta pointing at a file that was never created.
+//
+// Restoring beats re-downloading by more than the transfer. The origin publishes
+// plain gzip, so provisioning also recompresses to BGZF and indexes it; the
+// durable copy is the finished article, so this skips a decompress, a bgzip pass
+// and an index build as well as most of a gigabyte from someone else's server.
+//
+// Called where a tool is about to run, so a snapshot that pins a reference no
+// selected annotation needs never transfers it.
+func EnsureReference(ctx context.Context, cfg *config.Config, snap *config.Snapshot) error {
+	if snap.Reference == "" {
+		return nil // pins none; RequiresMissingReference reports that separately
+	}
+	var src *config.Source
+	for i := range snap.Sources {
+		if snap.Sources[i].IsReference() {
+			src = &snap.Sources[i]
+			break
+		}
+	}
+	if src == nil {
+		// A reference from deployment config rather than a pinned source. There
+		// is no source to name a durable copy under, so the path is whatever the
+		// deployment put there.
+		if _, ok := preparedReference(snap.Reference); !ok {
+			return fmt.Errorf("the configured reference %s is missing or unindexed",
+				snap.Reference)
+		}
+		return nil
+	}
+	if _, ok := preparedReference(snap.Reference); ok {
+		return nil
+	}
+
+	dst := cfg.CacheDirAbs()
+	if !objstore.IsObject(dst) {
+		// Nothing to restore from: the durable copy is what an object store
+		// holds, and a filesystem cache_dir is the working copy itself.
+		return fmt.Errorf("reference %s is not present at %s; provision it with "+
+			"`varhub download %s`", src.ID(), snap.Reference, src.ID())
+	}
+
+	base := objstore.Join(dst, src.Name, src.Version)
+	name := filepath.Base(snap.Reference)
+	if !objectExists(ctx, objstore.Join(base, name)) {
+		return fmt.Errorf("reference %s is not present at %s and no durable copy "+
+			"exists at %s; provision it with `varhub download %s`",
+			src.ID(), snap.Reference, objstore.Join(base, name), src.ID())
+	}
+
+	logf("%s: restoring the durable copy", src.ID())
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		loc := objstore.Join(base, name+ext)
+		if ext != "" && !objectExists(ctx, loc) {
+			// .gzi exists only for BGZF. A missing .fai is fatal below rather
+			// than here, so the message names the index rather than the fetch.
+			continue
+		}
+		if err := fetchObject(ctx, loc, snap.Reference+ext); err != nil {
+			return fmt.Errorf("restore %s: %w", filepath.Base(loc), err)
+		}
+	}
+	// Verify what was restored is what a tool needs, rather than trusting that
+	// the objects were complete: a durable copy uploaded before indexing would
+	// otherwise leave {ref} pointing at a FASTA no tool can random-access.
+	if _, ok := preparedReference(snap.Reference); !ok {
+		return fmt.Errorf("restored %s but it is still missing its .fai index; "+
+			"re-provision it with `varhub download --force %s`", src.ID(), src.ID())
+	}
+	logf("%s: restored %s", src.ID(), name)
+	return nil
+}
+
+// restoreDurableReference copies a prepared reference back from the object store,
+// reporting whether it produced a usable one.
+//
+// Best effort by design: every failure here falls through to the origin
+// download, which is slower but always works. A missing or half-uploaded durable
+// copy should cost time, not the provisioning run.
+func restoreDurableReference(ctx context.Context, cfg *config.Config, src config.Source,
+	local string) (string, bool) {
+
+	dst := cfg.CacheDirAbs()
+	if !objstore.IsObject(dst) {
+		return "", false
+	}
+	// The durable copy is the recompressed name, which is what provisioning
+	// uploaded — not the origin's, which may be plain gzip.
+	name := filepath.Base(bgzfName(local))
+	base := objstore.Join(dst, src.Name, src.Version)
+	if !objectExists(ctx, objstore.Join(base, name)) {
+		return "", false
+	}
+	target := filepath.Join(filepath.Dir(local), name)
+	for _, ext := range []string{"", ".fai", ".gzi"} {
+		loc := objstore.Join(base, name+ext)
+		if ext != "" && !objectExists(ctx, loc) {
+			continue
+		}
+		if err := fetchObject(ctx, loc, target+ext); err != nil {
+			logf("%s: durable copy unusable (%v); falling back to the origin", src.ID(), err)
+			return "", false
+		}
+	}
+	// Only a copy that a tool can actually random-access counts. A durable copy
+	// uploaded before its index would otherwise be reported as a success and
+	// fail later inside a container.
+	p, ok := preparedReference(target)
+	if !ok {
+		logf("%s: durable copy has no .fai; falling back to the origin", src.ID())
+		return "", false
+	}
+	return p, true
 }

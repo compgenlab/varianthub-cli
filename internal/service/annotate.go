@@ -162,6 +162,18 @@ func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Sn
 			return nil, cleanup, fmt.Errorf("source %s requires a reference genome for %s, "+
 				"but the snapshot pins none", id, snap.Assembly)
 		}
+		// Pinned is not the same as present. A reference resolves to a local
+		// path because a tool binds its directory into a container, so a worker
+		// that did not run the provisioning download has nothing there — and the
+		// check above passes, because it asks what the snapshot pins rather than
+		// what this machine holds. Restore it from the durable copy.
+		//
+		// Here rather than earlier so it stays lazy: a snapshot can pin a
+		// reference no selected annotation needs, and that must not transfer a
+		// gigabyte.
+		if err := fetch.EnsureReference(ctx, cfg, snap); err != nil {
+			return nil, cleanup, err
+		}
 		if toolStore != nil {
 			if err := toolStore.Init(ctx); err != nil {
 				return nil, cleanup, err

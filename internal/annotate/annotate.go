@@ -18,6 +18,7 @@ import (
 	htsann "github.com/compgenlab/cghts/vcf/annotate"
 
 	"github.com/compgenlab/varianthub-cli/internal/config"
+	"github.com/compgenlab/varianthub-cli/internal/fetch"
 	"github.com/compgenlab/varianthub-cli/internal/model"
 	"github.com/compgenlab/varianthub-cli/internal/objstore"
 	"github.com/compgenlab/varianthub-cli/internal/software"
@@ -46,6 +47,20 @@ func AnnotateVCFSnapshot(ctx context.Context, cfg *config.Config, snap *config.S
 	eff := snap
 	toolSources := snap.ToolSources()
 	if len(toolSources) > 0 {
+		// Same two questions the locus path asks before running a tool, asked
+		// here because this path runs tools too and had neither: whether a
+		// reference is pinned at all, and whether this machine actually holds
+		// it. Without the first, {ref} renders empty and VEP fails on a mangled
+		// command line; without the second, --fasta names a path that a worker
+		// which did not run the provisioning download never created.
+		if id := snap.RequiresMissingReference(); id != "" {
+			return fmt.Errorf("source %s requires a reference genome for %s, "+
+				"but the snapshot pins none", id, snap.Assembly)
+		}
+		if err := fetch.EnsureReference(ctx, cfg, snap); err != nil {
+			return err
+		}
+
 		workdir, err := os.MkdirTemp("", "varhub-tools-")
 		if err != nil {
 			return err

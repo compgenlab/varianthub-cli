@@ -28,6 +28,9 @@ type stubStore struct {
 	objects map[string][]byte
 	meta    map[string]string
 	puts    int
+	// gets counts completed downloads, so a test can assert that a transfer did
+	// not happen — the restore path is only correct if it stays lazy.
+	gets    int
 	failPut bool
 }
 
@@ -92,6 +95,9 @@ func (s *stubStore) CheckBucket(_ context.Context, _ string) error { return nil 
 func (s *stubStore) Download(ctx context.Context, ref objstore.Ref, w io.Writer) error {
 	s.mu.Lock()
 	body, ok := s.objects[ref.String()]
+	if ok {
+		s.gets++
+	}
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("no such object: %s", ref)

@@ -260,6 +260,28 @@ func containerMapping(t config.Tool, p Params) (*strings.Replacer, []string) {
 func runStep(ctx context.Context, t config.Tool, step config.Step, idx int, p Params) error {
 	// Container steps render against fixed /varhub/* mountpoints; host steps use the
 	// real host paths. The script always lives in the (host) workdir.
+	// A step that needs the reference must not be run without one.
+	//
+	// {ref} rendered as the empty string produces a command that is still valid
+	// shell and no longer means what it says: "--fasta {ref} --fork 4" becomes
+	// "--fasta --fork 4", so --fasta consumes --fork and VEP reports
+	//
+	//	ERROR: Unexpected extra command-line parameter(s): 4
+	//
+	// which names neither the reference nor the flag that swallowed it. The
+	// snapshot-level guard does not always reach this: it fires only when a
+	// source declares requires_reference, and a manifest that omits it leaves
+	// the tool to fail on a mangled command line instead.
+	//
+	// Checked here because this is the last place that knows both what the step
+	// asks for and what it was given.
+	if strings.Contains(step.Run, "{ref}") && p.Ref == "" {
+		return fmt.Errorf("%s: step %q needs a reference genome ({ref}) and none is "+
+			"configured for this snapshot's assembly — set a default reference for "+
+			"the build, or the tool will be run with an empty --fasta and fail on "+
+			"an unrelated flag", t.ID(), step.Name)
+	}
+
 	var repl *strings.Replacer
 	var binds []string
 	if step.Container {

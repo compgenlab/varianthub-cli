@@ -241,3 +241,36 @@ func TestMissingAssets(t *testing.T) {
 		t.Errorf("after declaring, missingAssets = %v, want none", got)
 	}
 }
+
+// A step that asks for {ref} with no reference configured must say so.
+//
+// Rendering it empty leaves valid shell that means something else: "--fasta
+// {ref} --fork 4" becomes "--fasta --fork 4", --fasta eats --fork, and VEP
+// reports "Unexpected extra command-line parameter(s): 4" — which names neither
+// the reference nor the flag it swallowed, and cost an afternoon.
+func TestStepNeedingAReferenceFailsWhenThereIsNone(t *testing.T) {
+	tl := config.Tool{Name: "vep", Version: "113"}
+	step := config.Step{Name: "vep", Run: "vep --fasta {ref} --fork {threads} -i {input}"}
+
+	err := runStep(context.Background(), tl, step, 0, Params{Workdir: t.TempDir()})
+	if err == nil {
+		t.Fatal("no error: the step ran with an empty --fasta")
+	}
+	for _, want := range []string{"reference genome", "{ref}", "vep"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// A step that does not use {ref} is unaffected — tool setup runs before any
+// reference exists, and must not start failing because of this check.
+func TestStepWithoutARefPlaceholderIsUnaffected(t *testing.T) {
+	tl := config.Tool{Name: "vep", Version: "113"}
+	step := config.Step{Name: "install", Run: "echo installing into {datadir}"}
+
+	err := runStep(context.Background(), tl, step, 0, Params{Workdir: t.TempDir()})
+	if err != nil && strings.Contains(err.Error(), "reference genome") {
+		t.Fatalf("a step with no {ref} was refused for want of a reference: %v", err)
+	}
+}

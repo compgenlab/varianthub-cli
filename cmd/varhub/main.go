@@ -347,8 +347,21 @@ func cmdAnnotate(ctx context.Context, cfgPath, snapshot string, args []string) e
 	if err != nil {
 		return err
 	}
-	lg.Logf("done: %s loci annotated (%s newly computed, rest from cache)",
-		annotatepkg.Count(len(loci)), annotatepkg.Count(res.Novel))
+	// Says what happened rather than a fixed sentence. "rest from cache" was
+	// printed unconditionally, including when no cache existed to draw on — an
+	// installation whose config declares no [database] has a nil store, and the
+	// line still credited a cache for every locus it did not call novel. Reading
+	// it as evidence of caching is the obvious mistake, and it was the wrong
+	// trail to follow.
+	switch {
+	case st == nil:
+		lg.Logf("done: %s loci annotated (%s computed; no cache configured)",
+			annotatepkg.Count(len(loci)), annotatepkg.Count(res.Novel))
+	default:
+		lg.Logf("done: %s loci annotated (%s newly computed, %s from cache)",
+			annotatepkg.Count(len(loci)), annotatepkg.Count(res.Novel),
+			annotatepkg.Count(len(loci)-res.Novel))
+	}
 
 	w := io.Writer(os.Stdout)
 	if *out != "" && *out != "-" {

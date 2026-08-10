@@ -132,14 +132,27 @@ func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Sn
 	// Run any tool sources (VEP/ANNOVAR) referenced by the selected annotations over
 	// the requested loci, projecting each tool's output as a source the engine
 	// overlays. Selection-aware so an expensive tool isn't launched unless asked for.
-	// The tool store is nil when bypassing the cache (bulk VCF) so RunToolsForLoci
-	// runs the tool directly over all loci; the cached path needs a non-nil store.
+	//
+	// The store decides whether the run is cached, and nothing decides whether it
+	// happens: a referenced tool always runs. This used to also require a store or
+	// an explicit cache bypass —
+	//
+	//	len(tools) > 0 && (toolStore != nil || skipToolCache)
+	//
+	// which reads as "run them if we can cache them, or if we were told not to
+	// bother". But a nil store means no cache is available, and the answer to that
+	// is to run the tool uncached, not to skip it. A deployment with no cache
+	// configured therefore dropped every tool source on the per-locus path, in
+	// silence: the file-based sources annotated normally and VEP's columns came
+	// back empty, indistinguishable from VEP having nothing to say about the
+	// variant. runTools already handles a nil store — the guard just never let it
+	// get there.
 	toolStore := st
 	if skipToolCache {
 		toolStore = nil
 	}
 	var toolSrcs []config.Source
-	if tools := ReferencedTools(snap, selected); len(tools) > 0 && (toolStore != nil || skipToolCache) {
+	if tools := ReferencedTools(snap, selected); len(tools) > 0 {
 		// Checked here, where a tool is about to run and actually needs the
 		// genome. {ref} would otherwise render empty and the tool would fail on
 		// a mangled command line — VEP reports "Unexpected extra command-line
@@ -159,11 +172,25 @@ func buildEngineForLoci(ctx context.Context, cfg *config.Config, snap *config.Sn
 			return nil, cleanup, err
 		}
 		cleanup = func() { os.RemoveAll(workdir) }
+
+		// Named before it starts. A tool source is minutes of work behind a
+		// container runtime, and the run that produced this comment reported
+		// nothing at all between "annotating 1 loci" and "done" — so a tool that
+		// was never launched and a tool that ran and found nothing produced
+		// identical output.
+		names := make([]string, 0, len(tools))
+		for _, t := range tools {
+			names = append(names, t.ID())
+		}
+		fmt.Fprintf(os.Stderr, "varhub: running %d tool source(s) over %d loci: %s\n",
+			len(tools), len(loci), strings.Join(names, ", "))
+
 		toolSrcs, err = annotate.RunToolsForLoci(ctx, cfg, tools, toolStore, loci, workdir, snap.Reference, snap.Assembly)
 		if err != nil {
 			cleanup()
 			return nil, func() {}, err
 		}
+		fmt.Fprintf(os.Stderr, "varhub: tool source(s) finished; %d output(s) overlaid\n", len(toolSrcs))
 	}
 
 	eng, err := NewEngineOverStore(ctx, cfg, snap, st, toolSrcs)

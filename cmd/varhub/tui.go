@@ -583,7 +583,7 @@ func (m *editModel) toConfig() tea.Cmd {
 	}
 	fields = append(fields,
 		huh.NewSelect[string]().Title("database backend").Description("none = cache disabled").
-			Options(huh.NewOptions("sqlite", "postgres", "none")...).Value(&m.cfgEdit.Database.Backend),
+			Options(huh.NewOptions("sqlite", "none")...).Value(&m.cfgEdit.Database.Backend),
 		huh.NewInput().Title("database path/DSN").Value(&m.cfgEdit.Database.Path),
 		huh.NewText().Title("registries").Description("one registry.toml URL per line").Value(&m.cfgRegistries),
 	)

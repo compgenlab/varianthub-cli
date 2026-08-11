@@ -1,7 +1,12 @@
-// Package store defines the backend-agnostic persistence interface for the
-// annotation cache. The shared contract is this interface, not any one physical
-// schema — SQLite (default) and Postgres (later) may lay tables out differently
-// behind it.
+// Package store defines the persistence interface for varhub's annotation
+// cache. The contract is this interface rather than any one physical schema, so
+// a backend is free to lay its tables out as it likes behind it.
+//
+// SQLite is the only backend. A Postgres one existed for the web deployment and
+// was removed once that cache moved up a layer: varianthub-web looks a variant
+// up before it invokes varhub at all, which skips the process, the source reads
+// and any tool container — none of which a cache down here can avoid — and keeps
+// a database credential out of a config file varhub executes recipes beside.
 package store
 
 import (
@@ -13,7 +18,7 @@ import (
 
 // HourBucket rounds a Unix timestamp down to the hour.
 //
-// Both backends stamp last_used through this. An LRU only needs to know roughly
+// last_used is stamped through this. An LRU only needs to know roughly
 // what has been used lately, and rounding turns "one write per read" into "one
 // write per variant per hour" — on a table read by every annotation, that is the
 // difference between a timestamp column and a write-amplification problem.
@@ -25,40 +30,30 @@ func HourBucket(sec int64) int64 { return sec - sec%3600 }
 
 // Budget bounds a cache. The zero value means unbounded.
 //
-// Two knobs because the two backends can answer two different questions
-// cheaply. Age is universal: both index last_used, so discarding what is older
-// than a cutoff costs only what it deletes. A count is not — it needs to know
-// how big the cache is before deciding to act, and only Postgres keeps an
-// estimate (pg_class.reltuples) that answers that without scanning. SQLite would
-// have to COUNT(*) a table with hundreds of millions of rows to learn the same
-// thing, after every run, usually to conclude there was nothing to do.
-//
-// Config validation rejects MaxEntries against a backend that cannot serve it,
-// so an unsupported setting is an error at startup rather than a limit that
-// silently never applies.
+// Age, and only age. Trimming by count would need to know the cache's size
+// before deciding to act, and SQLite keeps no estimate — it would have to
+// COUNT(*) a table of hundreds of millions of rows after every run, almost
+// always to conclude there was nothing to do. A cutoff costs a range scan over
+// the LRU index and touches only what it removes.
 type Budget struct {
-	// MaxAge discards entries unused for longer than this. Both backends.
+	// MaxAge discards entries unused for longer than this.
 	MaxAge time.Duration
-	// MaxEntries caps cached (variant, source) units. Postgres only.
-	MaxEntries int64
 }
 
 // Unbounded reports whether nothing would be evicted.
-func (b Budget) Unbounded() bool { return b.MaxAge <= 0 && b.MaxEntries <= 0 }
+func (b Budget) Unbounded() bool { return b.MaxAge <= 0 }
 
 // EvictionResult reports what a sweep did.
 type EvictionResult struct {
-	// Removed counts (variant, source) units for Postgres and rows for SQLite —
-	// each backend's natural unit. It is progress reporting, not a quantity
-	// anything decides on.
+	// Removed counts rows. It is progress reporting, not a quantity anything
+	// decides on.
 	Removed int64
-	// Skipped means another sweeper held the lock and this one stood down.
+	// Skipped means another sweeper held the cache and this one stood down.
 	Skipped bool
 }
 
-// Evictor is a store that can be trimmed. Both backends implement it; the
-// interface is separate from Store because trimming is a property of a cache
-// with a budget, not of the annotation contract.
+// Evictor is a store that can be trimmed. Separate from Store because trimming
+// is a property of a cache with a budget, not of the annotation contract.
 type Evictor interface {
 	// Evict trims the cache to budget, removing least-recently-used first.
 	// Whole (variant, source) units go at once: a unit half-removed would be

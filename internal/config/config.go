@@ -114,20 +114,17 @@ func (c *Config) RegistryLocations() []string {
 // without limit — the behaviour every existing installation already has. Setting
 // one starts trimming at the end of each run.
 type Database struct {
-	Backend string `toml:"backend"` // "sqlite" (default) or "postgres"
-	Path    string `toml:"path"`    // file path (sqlite) or DSN (postgres)
+	Backend string `toml:"backend"` // "sqlite" (default)
+	Path    string `toml:"path"`    // file path
 	// MaxAge discards entries unused for longer than this, as a duration string
-	// ("2160h"). Both backends.
+	// ("2160h").
 	MaxAge string `toml:"max_age"`
-	// MaxEntries caps cached (variant, source) units. Postgres only: see
-	// store.Budget for why SQLite cannot answer a count cheaply.
-	MaxEntries int64 `toml:"max_entries"`
 }
 
 // CacheBudget is the eviction budget, already parsed. The zero value means
 // unbounded.
 func (c *Config) CacheBudget() store.Budget {
-	b := store.Budget{MaxEntries: c.Database.MaxEntries}
+	var b store.Budget
 	if d, err := time.ParseDuration(c.Database.MaxAge); err == nil {
 		b.MaxAge = d
 	}
@@ -1181,9 +1178,9 @@ func (c *Config) CacheEnabled() bool {
 func (c *Config) validate() error {
 	// assembly is snapshot-scoped now (global is only a fallback), so not required here.
 	switch c.Database.Backend {
-	case "", "none", "sqlite", "postgres":
+	case "", "none", "sqlite":
 	default:
-		return fmt.Errorf("config: unsupported database backend %q (want sqlite|postgres, or omit to disable)", c.Database.Backend)
+		return fmt.Errorf("config: unsupported database backend %q (want sqlite, or omit to disable)", c.Database.Backend)
 	}
 	if s := strings.TrimSpace(c.Database.MaxAge); s != "" {
 		d, err := time.ParseDuration(s)
@@ -1193,15 +1190,6 @@ func (c *Config) validate() error {
 		if d <= 0 {
 			return fmt.Errorf("config: database.max_age must be positive, got %q", s)
 		}
-	}
-	// Rejected rather than ignored. A count needs to know the cache's size before
-	// deciding to act, and only Postgres keeps an estimate that answers cheaply
-	// (see store.Budget). Accepting the setting here would leave an administrator
-	// believing the cache was bounded when nothing would ever trim it.
-	if c.Database.MaxEntries > 0 && c.Database.Backend != "postgres" {
-		return fmt.Errorf("config: database.max_entries needs the postgres backend "+
-			"(this is %q); use database.max_age to bound a SQLite cache",
-			c.Database.Backend)
 	}
 	return nil
 }
@@ -1745,7 +1733,7 @@ func (c *Config) resolveDir(d string) string {
 func (c *Config) DataDirAbs() string { return c.resolveDir(c.DataDir) }
 
 // DatabasePathAbs is database.path resolved relative to VARHUB_HOME (the config
-// dir) for sqlite; an absolute path or a postgres DSN is returned unchanged.
+// dir) for sqlite; an absolute path is returned unchanged.
 func (c *Config) DatabasePathAbs() string {
 	if c.Database.Backend != "sqlite" {
 		return c.Database.Path

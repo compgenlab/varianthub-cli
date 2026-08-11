@@ -46,6 +46,7 @@ import (
 	"github.com/compgenlab/varianthub-cli/internal/model"
 	"github.com/compgenlab/varianthub-cli/internal/service"
 	"github.com/compgenlab/varianthub-cli/internal/store"
+	"github.com/compgenlab/varianthub-cli/internal/store/postgres"
 	"github.com/compgenlab/varianthub-cli/internal/store/sqlite"
 	"github.com/compgenlab/varianthub-cli/internal/vcf"
 )
@@ -224,7 +225,10 @@ func openStore(cfg *config.Config) (store.Store, error) {
 	case "sqlite":
 		return sqlite.Open(cfg.DatabasePathAbs())
 	case "postgres":
-		return nil, fmt.Errorf("postgres backend not yet implemented")
+		// Shared between workers, which is the point: a SQLite file caches for
+		// one machine, and a deployment running several gets no benefit from a
+		// variant another worker already computed.
+		return postgres.Open(context.Background(), cfg.Database.Path)
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", cfg.Database.Backend)
 	}

@@ -161,7 +161,7 @@ on an indel). `vardist` and the sample-derived builtins are `-o` VCF only (see b
 
 | builtin | tag | needs samples? | notes |
 | --- | --- | --- | --- |
-| `auto_id` | (sets ID) | no | synthesize a variant ID |
+| `auto_id` | (sets ID) | no | synthesize a variant ID: `1-115256529-T-C` — chrom-pos-ref-alt without the `chr`, the form gnomAD and the variant portals use |
 | `indel` | | no | flag indels |
 | `tstv` | `CG_TSTV` | no | transition/transversion |
 | `vardist` | `CG_VARDIST` | no | distance to the nearest variant (streaming look-ahead) |

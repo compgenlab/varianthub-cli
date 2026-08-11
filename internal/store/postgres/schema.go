@@ -20,9 +20,12 @@ package postgres
 
 // schema is applied by Init and is idempotent.
 //
-// source holds "name:version" for an annotation source and the tool UID for a
-// tool's output — both are already versioned identifiers, which is what stops a
-// re-provisioned source serving values computed from data it no longer has.
+// source holds whatever identifies a pinned source-and-version — "name:version"
+// as the CLI writes it, or a UUID where the catalog keys them that way — and the
+// tool UID for a tool's output. The column is opaque to this package; all that
+// matters is that the identifier changes when the underlying data does, which is
+// what stops a re-provisioned source serving values computed from data it no
+// longer has.
 const schema = `
 CREATE TABLE IF NOT EXISTS cache_data_source (
   id      TEXT PRIMARY KEY,
@@ -58,16 +61,42 @@ CREATE TABLE IF NOT EXISTS cache_entry (
   PRIMARY KEY (vs_id, key)
 );
 
--- A tool's raw output for one variant: several lines, ordered. Hangs off the
--- same parent, so eviction removes a tool's output and its "already run" marker
--- together. Splitting them would leave a variant marked processed with no
--- output — the tool would not be re-run and its annotations would silently
--- vanish, which is the failure this design exists to prevent.
+-- Tool rows park on a parent whose ref and alt are empty, making the unit the
+-- SITE rather than the allele. That is not a shortcut, it is what the tool cache
+-- can actually promise: a tool's output line is filed under the locus the LINE
+-- reports (annotate.lineLocus), which need not be the locus that was submitted —
+-- a tab-format tool may declare no ref/alt columns at all, leaving both empty,
+-- and an allele may come back normalized. So lines can only ever be retrieved by
+-- position, and the tabix annotator re-matches ref/alt when the rebuilt file is
+-- read. The alleles that matter are kept where they are known to be true: on the
+-- processed markers, which are written from the submitted loci.
+--
+-- Both hang off that one parent so eviction takes them together. Splitting them
+-- would leave a variant marked processed with no output — the tool would not be
+-- re-run and its annotations would silently vanish, which is the failure this
+-- design exists to prevent.
+
+-- Which alleles at the site the tool has already been run on, including any that
+-- produced no output line. A marker cannot be inferred from the lines: "the tool
+-- ran and had nothing to say" and "the tool has not run" are different answers.
+CREATE TABLE IF NOT EXISTS cache_tool_processed (
+  vs_id BIGINT NOT NULL REFERENCES cache_variant_source (id) ON DELETE CASCADE,
+  ref   TEXT   NOT NULL,
+  alt   TEXT   NOT NULL,
+  PRIMARY KEY (vs_id, ref, alt)
+);
+
+-- A tool's raw output at the site: several lines, ordered, per reported allele.
+-- ref/alt are the LINE's, so they may be empty or normalized, and they are part
+-- of the key only to keep two alleles at one site from colliding on ord — reads
+-- ignore them.
 CREATE TABLE IF NOT EXISTS cache_tool_line (
   vs_id BIGINT  NOT NULL REFERENCES cache_variant_source (id) ON DELETE CASCADE,
+  ref   TEXT    NOT NULL,
+  alt   TEXT    NOT NULL,
   ord   INTEGER NOT NULL,
   line  TEXT    NOT NULL,
-  PRIMARY KEY (vs_id, ord)
+  PRIMARY KEY (vs_id, ref, alt, ord)
 );
 
 -- Per tool, not per variant, so it is not evictable and not part of the budget.

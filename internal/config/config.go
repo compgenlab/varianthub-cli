@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -21,6 +22,7 @@ import (
 
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
 	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 // decodeFragment decodes one snapshot fragment file with debug-friendly errors:
@@ -105,10 +107,31 @@ func (c *Config) RegistryLocations() []string {
 	return []string{DefaultRegistry}
 }
 
-// Database selects and locates the DB cache backend.
+// Database selects and locates the DB cache backend, and bounds how much it
+// keeps.
+//
+// Both bounds are off by default, so a cache configured without them grows
+// without limit — the behaviour every existing installation already has. Setting
+// one starts trimming at the end of each run.
 type Database struct {
 	Backend string `toml:"backend"` // "sqlite" (default) or "postgres"
 	Path    string `toml:"path"`    // file path (sqlite) or DSN (postgres)
+	// MaxAge discards entries unused for longer than this, as a duration string
+	// ("2160h"). Both backends.
+	MaxAge string `toml:"max_age"`
+	// MaxEntries caps cached (variant, source) units. Postgres only: see
+	// store.Budget for why SQLite cannot answer a count cheaply.
+	MaxEntries int64 `toml:"max_entries"`
+}
+
+// CacheBudget is the eviction budget, already parsed. The zero value means
+// unbounded.
+func (c *Config) CacheBudget() store.Budget {
+	b := store.Budget{MaxEntries: c.Database.MaxEntries}
+	if d, err := time.ParseDuration(c.Database.MaxAge); err == nil {
+		b.MaxAge = d
+	}
+	return b
 }
 
 // Reference pins the reference genome FASTA for one assembly (used by external
@@ -1161,6 +1184,24 @@ func (c *Config) validate() error {
 	case "", "none", "sqlite", "postgres":
 	default:
 		return fmt.Errorf("config: unsupported database backend %q (want sqlite|postgres, or omit to disable)", c.Database.Backend)
+	}
+	if s := strings.TrimSpace(c.Database.MaxAge); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("config: database.max_age %q is not a duration (e.g. \"2160h\"): %w", s, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("config: database.max_age must be positive, got %q", s)
+		}
+	}
+	// Rejected rather than ignored. A count needs to know the cache's size before
+	// deciding to act, and only Postgres keeps an estimate that answers cheaply
+	// (see store.Budget). Accepting the setting here would leave an administrator
+	// believing the cache was bounded when nothing would ever trim it.
+	if c.Database.MaxEntries > 0 && c.Database.Backend != "postgres" {
+		return fmt.Errorf("config: database.max_entries needs the postgres backend "+
+			"(this is %q); use database.max_age to bound a SQLite cache",
+			c.Database.Backend)
 	}
 	return nil
 }

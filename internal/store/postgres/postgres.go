@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -60,6 +61,10 @@ func (s *Store) RegisterSources(ctx context.Context, sources []model.DataSource)
 	return s.pool.SendBatch(ctx, b).Close()
 }
 
+// Sources lists the registered sources. Path comes back empty: it is a local
+// filesystem location, and a cache shared by workers that each resolve their own
+// paths has no single true answer for it. store.Store documents it as advisory
+// for exactly this reason.
 func (s *Store) Sources(ctx context.Context) ([]model.DataSource, error) {
 	rows, err := s.pool.Query(ctx, `SELECT name, version FROM cache_data_source ORDER BY id`)
 	if err != nil {
@@ -144,6 +149,19 @@ func (s *Store) touch(ctx context.Context, assembly string, chrom []string, pos 
 		assembly, chrom, pos, ref, alt, now)
 }
 
+// touchSites is touch for tool rows, whose parent is a site rather than an
+// allele. Scoped to one tool: two tools' parents can share a position, and
+// reading one says nothing about the other.
+func (s *Store) touchSites(ctx context.Context, toolUID string, chrom []string, pos []int64) {
+	now := hourOf(s.nowFn())
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE cache_variant_source vs SET last_used = $4
+		  FROM unnest($2::text[], $3::bigint[]) AS want(chrom, pos)
+		 WHERE vs.assembly = $5 AND vs.source = $1 AND vs.last_used < $4
+		   AND want.chrom = vs.chrom AND want.pos = vs.pos`,
+		toolUID, chrom, pos, now, toolAssembly)
+}
+
 // PutAnnotations writes rows, creating the (variant, source) parents they hang
 // off.
 //
@@ -195,7 +213,8 @@ func (s *Store) PutAnnotations(ctx context.Context, assembly string, rows []mode
 
 // Tool rows use the tool UID as their source and an empty assembly: the UID
 // already folds the assembly in (see annotate.toolUID), and repeating it here
-// would let the two disagree.
+// would let the two disagree. Their parent is per site, with empty ref/alt —
+// see the schema.
 const toolAssembly = ""
 
 func (s *Store) ToolProcessed(ctx context.Context, toolUID string, loci []model.Locus) (map[string]bool, error) {
@@ -204,12 +223,13 @@ func (s *Store) ToolProcessed(ctx context.Context, toolUID string, loci []model.
 	}
 	chrom, pos, ref, alt := columns(loci)
 	rows, err := s.pool.Query(ctx, `
-		SELECT vs.chrom, vs.pos, vs.ref, vs.alt
+		SELECT vs.chrom, vs.pos, tp.ref, tp.alt
 		  FROM cache_variant_source vs
+		  JOIN cache_tool_processed tp ON tp.vs_id = vs.id
 		  JOIN unnest($2::text[], $3::bigint[], $4::text[], $5::text[])
 		       AS want(chrom, pos, ref, alt)
 		    ON want.chrom = vs.chrom AND want.pos = vs.pos
-		   AND want.ref = vs.ref AND want.alt = vs.alt
+		   AND want.ref = tp.ref AND want.alt = tp.alt
 		 WHERE vs.assembly = $6 AND vs.source = $1`,
 		toolUID, chrom, pos, ref, alt, toolAssembly)
 	if err != nil {
@@ -228,7 +248,8 @@ func (s *Store) ToolProcessed(ctx context.Context, toolUID string, loci []model.
 		return nil, err
 	}
 	if len(out) > 0 {
-		s.touch(ctx, toolAssembly, chrom, pos, ref, alt)
+		c, p := sites(loci)
+		s.touchSites(ctx, toolUID, c, p)
 	}
 	return out, nil
 }
@@ -251,22 +272,28 @@ func (s *Store) ToolHeader(ctx context.Context, toolUID string) ([]string, error
 	return out, rows.Err()
 }
 
+// ToolLines returns every cached line at the given loci's POSITIONS, whatever
+// alleles those lines report. Retrieval by position is the contract (see
+// store.Store and the schema): a line's own ref/alt may be absent or normalized,
+// so matching on them would silently return nothing for a whole class of tools.
+// The rebuilt file is re-matched on ref/alt by the tabix annotator downstream,
+// so lines for a neighbouring allele cost a little I/O and change no answer.
 func (s *Store) ToolLines(ctx context.Context, toolUID string, loci []model.Locus) ([]model.ToolLine, error) {
 	if len(loci) == 0 {
 		return nil, nil
 	}
-	chrom, pos, ref, alt := columns(loci)
+	// Deduped to distinct sites: several alleles at one position would otherwise
+	// join the same lines once each and duplicate them in the rebuilt file.
+	chrom, pos := sites(loci)
 	rows, err := s.pool.Query(ctx, `
 		SELECT vs.chrom, vs.pos, tl.line
 		  FROM cache_variant_source vs
 		  JOIN cache_tool_line tl ON tl.vs_id = vs.id
-		  JOIN unnest($2::text[], $3::bigint[], $4::text[], $5::text[])
-		       AS want(chrom, pos, ref, alt)
+		  JOIN unnest($2::text[], $3::bigint[]) AS want(chrom, pos)
 		    ON want.chrom = vs.chrom AND want.pos = vs.pos
-		   AND want.ref = vs.ref AND want.alt = vs.alt
-		 WHERE vs.assembly = $6 AND vs.source = $1
-		 ORDER BY vs.chrom, vs.pos, tl.ord`,
-		toolUID, chrom, pos, ref, alt, toolAssembly)
+		 WHERE vs.assembly = $4 AND vs.source = $1
+		 ORDER BY vs.chrom, vs.pos, tl.ref, tl.alt, tl.ord`,
+		toolUID, chrom, pos, toolAssembly)
 	if err != nil {
 		return nil, err
 	}
@@ -299,37 +326,79 @@ func (s *Store) PutToolOutput(ctx context.Context, toolUID string, header []stri
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
 
-	for i, l := range header {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO cache_tool_header (tool_uid,ord,line) VALUES ($1,$2,$3)
-			ON CONFLICT (tool_uid,ord) DO UPDATE SET line = excluded.line`,
-			toolUID, i, l); err != nil {
+	// Cleared first, so the header is replaced rather than merged. Upserting by
+	// ord alone would leave the tail of a longer previous header in place, and
+	// ToolHeader would hand back a splice of two runs.
+	if len(header) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM cache_tool_header WHERE tool_uid=$1`, toolUID); err != nil {
 			return err
+		}
+		for i, l := range header {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO cache_tool_header (tool_uid,ord,line) VALUES ($1,$2,$3)`,
+				toolUID, i, l); err != nil {
+				return err
+			}
 		}
 	}
 
 	now := hourOf(s.nowFn())
-	for _, loc := range processed {
+	// One parent per site, shared by this site's markers and lines. Memoized
+	// because several alleles at a position resolve to the same row.
+	ids := map[string]int64{}
+	parent := func(chrom string, pos int64) (int64, error) {
+		k := chrom + "\x00" + strconv.FormatInt(pos, 10)
+		if id, ok := ids[k]; ok {
+			return id, nil
+		}
 		var id int64
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO cache_variant_source (assembly,chrom,pos,ref,alt,source,last_used)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			VALUES ($1,$2,$3,'','',$4,$5)
 			ON CONFLICT (assembly,chrom,pos,ref,alt,source)
 			  DO UPDATE SET last_used = excluded.last_used
 			RETURNING id`,
-			toolAssembly, loc.Chrom, loc.Pos, loc.Ref, loc.Alt, toolUID, now).Scan(&id); err != nil {
+			toolAssembly, chrom, pos, toolUID, now).Scan(&id); err != nil {
+			return 0, err
+		}
+		ids[k] = id
+		return id, nil
+	}
+
+	// Markers carry the SUBMITTED alleles — the only place they are known to be
+	// exact — and are written for every processed locus, including those the tool
+	// had nothing to say about.
+	for _, loc := range processed {
+		id, err := parent(loc.Chrom, loc.Pos)
+		if err != nil {
 			return err
 		}
-		// Replaced rather than merged: a re-run's output is the whole answer for
-		// that locus, and leaving earlier lines beside it would duplicate records
-		// in the rebuilt file.
-		if _, err := tx.Exec(ctx, `DELETE FROM cache_tool_line WHERE vs_id=$1`, id); err != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO cache_tool_processed (vs_id,ref,alt) VALUES ($1,$2,$3)
+			ON CONFLICT (vs_id,ref,alt) DO NOTHING`,
+			id, loc.Ref, loc.Alt); err != nil {
 			return err
 		}
-		for i, line := range lines[loc] {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO cache_tool_line (vs_id,ord,line) VALUES ($1,$2,$3)`,
-				id, i, line); err != nil {
+	}
+
+	// Lines carry the alleles the tool REPORTED, which is why they are keyed
+	// separately from the markers above and may be empty.
+	//
+	// No delete-before-insert: the loci reaching here are novel (see
+	// annotate.runToolCached), so a site cannot already hold lines for them, and
+	// a blanket delete on this parent would take a sibling allele's output with
+	// it. The upsert keeps a re-run idempotent without a per-locus index probe on
+	// a write that runs at whole-genome scale.
+	for loc, ls := range lines {
+		id, err := parent(loc.Chrom, loc.Pos)
+		if err != nil {
+			return err
+		}
+		for i, line := range ls {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO cache_tool_line (vs_id,ref,alt,ord,line) VALUES ($1,$2,$3,$4,$5)
+				ON CONFLICT (vs_id,ref,alt,ord) DO UPDATE SET line = excluded.line`,
+				id, loc.Ref, loc.Alt, i, line); err != nil {
 				return err
 			}
 		}
@@ -338,6 +407,25 @@ func (s *Store) PutToolOutput(ctx context.Context, toolUID string, header []stri
 }
 
 // --- helpers ---
+
+// sites reduces loci to their distinct positions, preserving order.
+func sites(loci []model.Locus) (chrom []string, pos []int64) {
+	type site struct {
+		chrom string
+		pos   int64
+	}
+	seen := make(map[site]bool, len(loci))
+	for _, l := range loci {
+		k := site{l.Chrom, l.Pos}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		chrom = append(chrom, l.Chrom)
+		pos = append(pos, l.Pos)
+	}
+	return chrom, pos
+}
 
 func columns(loci []model.Locus) (chrom []string, pos []int64, ref, alt []string) {
 	chrom = make([]string, len(loci))

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -1476,5 +1477,52 @@ func TestSnapshotResolvesReferenceFromPinnedSource(t *testing.T) {
 	}
 	if got := snap.RequiresMissingReference(); got != "" {
 		t.Errorf("a snapshot with a reference reported %q missing", got)
+	}
+}
+
+// A cache bound that cannot be honoured is an error, not a no-op. Accepting
+// max_entries on SQLite would leave an administrator believing the cache was
+// capped while nothing ever trimmed it — a disk that fills weeks later.
+func TestCacheBudgetValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		db      Database
+		wantErr string
+	}{
+		{"max_entries needs postgres",
+			Database{Backend: "sqlite", MaxEntries: 1000}, "max_entries needs the postgres backend"},
+		{"max_entries on postgres is fine",
+			Database{Backend: "postgres", MaxEntries: 1000}, ""},
+		{"max_age parses",
+			Database{Backend: "sqlite", MaxAge: "2160h"}, ""},
+		{"max_age must be a duration",
+			Database{Backend: "sqlite", MaxAge: "90 days"}, "is not a duration"},
+		{"max_age must be positive",
+			Database{Backend: "sqlite", MaxAge: "-1h"}, "must be positive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (&Config{Database: tc.db}).validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("rejected a usable budget: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("accepted %+v, which nothing would ever act on", tc.db)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The parsed budget is what eviction actually receives.
+func TestCacheBudgetParses(t *testing.T) {
+	c := &Config{Database: Database{Backend: "postgres", MaxAge: "48h", MaxEntries: 5}}
+	b := c.CacheBudget()
+	if b.MaxAge != 48*time.Hour || b.MaxEntries != 5 {
+		t.Errorf("budget is %+v, want 48h/5", b)
+	}
+	if (&Config{}).CacheBudget().Unbounded() != true {
+		t.Error("an empty [database] should bound nothing")
 	}
 }

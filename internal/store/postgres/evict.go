@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 // evictLockKey identifies the eviction advisory lock.
@@ -15,15 +17,12 @@ import (
 // nothing to clear.
 const evictLockKey = 0x7661_7268_7562_0001 // "varhub" + 1
 
-// EvictionResult reports what a sweep did.
-type EvictionResult struct {
-	Before  int64 // variant-source rows before
-	Removed int64 // variant-source rows removed
-	Skipped bool  // another sweeper held the lock
-}
-
-// Evict trims the cache to maxEntries (variant,source) rows, removing the
-// least recently used first.
+// Evict trims the cache to budget, least recently used first.
+//
+// Both knobs, applied in that order: age first, because discarding what nobody
+// has touched in months is cheap and may leave the count already under its cap,
+// and a count sweep that runs anyway would then take entries that are merely
+// old-ish rather than genuinely stale.
 //
 // Counted in parents rather than values: entries per (variant, source) is
 // bounded by how many fields a source declares, so the parent count is a stable
@@ -31,51 +30,73 @@ type EvictionResult struct {
 // every writer.
 //
 // The count comes from the planner's estimate rather than count(*), which is a
-// sequential scan of the whole table — an hourly full scan of tens of millions
-// of rows to decide whether to do anything is a poor trade for precision a cache
-// budget does not need.
+// sequential scan of the whole table — a full scan after every run to decide
+// whether to do anything is a poor trade for precision a cache budget does not
+// need.
 //
 // Deleted in batches, each its own transaction: one statement removing millions
 // of rows holds locks for its whole duration and writes a WAL record to match.
 // A batch's row locks are brief and only touch what is going.
-func (s *Store) Evict(ctx context.Context, maxEntries, batch int64) (EvictionResult, error) {
-	if maxEntries <= 0 {
-		return EvictionResult{}, fmt.Errorf("cache: maxEntries must be positive, got %d", maxEntries)
+func (s *Store) Evict(ctx context.Context, budget store.Budget) (store.EvictionResult, error) {
+	if budget.Unbounded() {
+		return store.EvictionResult{}, nil
 	}
-	if batch <= 0 {
-		batch = 10_000
-	}
+	const batch int64 = 10_000
 
 	// One sweeper at a time. Not fatal to lose the race — it means somebody
-	// else is already doing it.
+	// else is already doing it. Unlike SQLite, this cache is shared, so several
+	// workers can finish a run at once and all reach for the same rows.
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
-		return EvictionResult{}, err
+		return store.EvictionResult{}, err
 	}
 	defer conn.Release()
 
 	var got bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, int64(evictLockKey)).Scan(&got); err != nil {
-		return EvictionResult{}, err
+		return store.EvictionResult{}, err
 	}
 	if !got {
-		return EvictionResult{Skipped: true}, nil
+		return store.EvictionResult{Skipped: true}, nil
 	}
 	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(evictLockKey)) //nolint:errcheck
 
-	before, err := s.approxCount(ctx)
-	if err != nil {
-		return EvictionResult{}, err
+	var res store.EvictionResult
+	if budget.MaxAge > 0 {
+		cutoff := store.HourBucket(s.nowFn() - int64(budget.MaxAge.Seconds()))
+		for {
+			tag, err := s.pool.Exec(ctx, `
+				DELETE FROM cache_variant_source
+				 WHERE id IN (
+				   SELECT id FROM cache_variant_source
+				    WHERE last_used < $1
+				    LIMIT $2
+				 )`, cutoff, batch)
+			if err != nil {
+				return res, fmt.Errorf("cache: evict by age: %w", err)
+			}
+			res.Removed += tag.RowsAffected()
+			if tag.RowsAffected() < batch {
+				break
+			}
+		}
 	}
-	res := EvictionResult{Before: before}
-	if before <= maxEntries {
+	if budget.MaxEntries <= 0 {
 		return res, nil
 	}
 
-	target := before - maxEntries
-	for res.Removed < target {
+	before, err := s.approxCount(ctx)
+	if err != nil {
+		return res, err
+	}
+	if before <= budget.MaxEntries {
+		return res, nil
+	}
+
+	target := before - budget.MaxEntries
+	for removed := int64(0); removed < target; {
 		n := batch
-		if remaining := target - res.Removed; remaining < n {
+		if remaining := target - removed; remaining < n {
 			n = remaining
 		}
 		tag, err := s.pool.Exec(ctx, `
@@ -88,11 +109,11 @@ func (s *Store) Evict(ctx context.Context, maxEntries, batch int64) (EvictionRes
 		if err != nil {
 			return res, err
 		}
-		removed := tag.RowsAffected()
-		if removed == 0 {
+		if tag.RowsAffected() == 0 {
 			break // nothing left to take; the estimate was high
 		}
-		res.Removed += removed
+		removed += tag.RowsAffected()
+		res.Removed += tag.RowsAffected()
 	}
 	return res, nil
 }

@@ -214,6 +214,37 @@ func buildEngineWith(ctx context.Context, cfg *config.Config, snap *config.Snaps
 	}, nil
 }
 
+// trimCache evicts to the configured budget once the run's own writes are in.
+//
+// After each run rather than on a schedule. A cache is only over budget because
+// something filled it, so the run that filled it is exactly when to look; and a
+// timer needs a process that outlives the run, which the CLI does not have and a
+// worker pod cannot be relied on to. The cost when there is nothing to do is one
+// indexed lookup, which is the common case by a wide margin.
+//
+// After the results are printed, and never fatal: the annotation is the answer
+// the caller asked for, and housekeeping that fails must not take it down with
+// it. A failure is reported rather than swallowed, since a cache that has quietly
+// stopped trimming is a disk that fills up weeks later with no explanation.
+func trimCache(ctx context.Context, lg *annotatepkg.Logger, st store.Store, budget store.Budget) {
+	if budget.Unbounded() {
+		return
+	}
+	ev, ok := st.(store.Evictor)
+	if !ok {
+		return
+	}
+	res, err := ev.Evict(ctx, budget)
+	switch {
+	case err != nil:
+		lg.Logf("cache: trim failed (the cache is not bounded until this succeeds): %v", err)
+	case res.Skipped:
+		lg.Logf("cache: another worker is trimming; skipped")
+	case res.Removed > 0:
+		lg.Logf("cache: trimmed %s stale entries", annotatepkg.Count(int(res.Removed)))
+	}
+}
+
 // openStore opens the configured annotation-cache backend.
 // openStore opens the configured cache store, or returns (nil, nil) when the cache is
 // disabled (no [database]) — callers treat a nil store as "compute, don't persist".
@@ -365,6 +396,7 @@ func cmdAnnotate(ctx context.Context, cfgPath, snapshot string, args []string) e
 		lg.Logf("done: %s loci annotated (%s newly computed, %s from cache)",
 			annotatepkg.Count(len(loci)), annotatepkg.Count(res.Novel),
 			annotatepkg.Count(len(loci)-res.Novel))
+		trimCache(ctx, lg, st, cfg.CacheBudget())
 	}
 
 	w := io.Writer(os.Stdout)

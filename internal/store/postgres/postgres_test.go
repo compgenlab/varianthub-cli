@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 func testStore(t *testing.T) *Store {
@@ -101,7 +102,7 @@ func TestEvictionRemovesWholeUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := s.Evict(ctx, 1, 10)
+	res, err := s.Evict(ctx, store.Budget{MaxEntries: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,10 +153,6 @@ func TestToolMarkerAndLinesAreEvictedTogether(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `ANALYZE cache_variant_source`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Evict(ctx, 0+1, 10); err != nil {
-		// budget 1 with 1 row: nothing to do, so force it instead
-		t.Fatal(err)
-	}
 	if _, err := s.pool.Exec(ctx, `DELETE FROM cache_variant_source`); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +171,112 @@ func TestToolMarkerAndLinesAreEvictedTogether(t *testing.T) {
 	}
 	if len(lines) != 0 {
 		t.Errorf("%d output lines survived the parent", len(lines))
+	}
+}
+
+// A tool's output lines are filed under the locus the LINE reports, which is not
+// always the locus that was submitted: a tab-format tool with no ref_col/alt_col
+// reports no alleles at all (annotate.lineLocus leaves them empty), and an allele
+// may come back normalized. Storing or fetching those lines by allele loses them
+// outright — the tool would be marked as having run, and its annotations would be
+// missing from the rebuilt file with nothing to say so.
+func TestToolLinesSurviveAnAlleleTheToolDidNotReport(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	const uid = "phylop:1|GRCh38"
+	submitted := model.Locus{Chrom: "chr1", Pos: 100, Ref: "A", Alt: "G"}
+	// What lineLocus yields for a position-only tab tool: same site, no alleles.
+	reported := model.Locus{Chrom: "chr1", Pos: 100}
+
+	if err := s.PutToolOutput(ctx, uid, []string{"#chrom\tpos\tscore"},
+		map[model.Locus][]string{reported: {"chr1\t100\t2.5"}},
+		[]model.Locus{submitted}); err != nil {
+		t.Fatal(err)
+	}
+
+	lines, err := s.ToolLines(ctx, uid, []model.Locus{submitted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d cached lines, want 1 — a line the tool reported without "+
+			"alleles was not retrievable by the locus that was submitted", len(lines))
+	}
+	if lines[0].Line != "chr1\t100\t2.5" {
+		t.Errorf("got line %q", lines[0].Line)
+	}
+
+	// The marker still carries the submitted alleles, so a sibling allele at the
+	// same site is still novel and will still be sent to the tool.
+	done, err := s.ToolProcessed(ctx, uid, []model.Locus{
+		submitted, {Chrom: "chr1", Pos: 100, Ref: "A", Alt: "T"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !done[submitted.Key()] {
+		t.Error("the submitted allele was not marked processed")
+	}
+	if done[model.Locus{Chrom: "chr1", Pos: 100, Ref: "A", Alt: "T"}.Key()] {
+		t.Error("an allele that was never submitted came back as already processed")
+	}
+}
+
+// Two alleles at one site keep their own output. They share a parent row, so a
+// write for one must not disturb the other's lines.
+func TestSiblingAllelesAtOneSiteKeepTheirOwnLines(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	const uid = "vep:113|GRCh38"
+	ag := model.Locus{Chrom: "chr1", Pos: 100, Ref: "A", Alt: "G"}
+	at := model.Locus{Chrom: "chr1", Pos: 100, Ref: "A", Alt: "T"}
+
+	for _, l := range []model.Locus{ag, at} {
+		if err := s.PutToolOutput(ctx, uid, nil,
+			map[model.Locus][]string{l: {"chr1\t100\t" + l.Alt}},
+			[]model.Locus{l}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines, err := s.ToolLines(ctx, uid, []model.Locus{ag, at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2 — one allele's write clobbered the other's", len(lines))
+	}
+	// Asking about a single allele still returns the whole site: the tabix
+	// annotator re-matches ref/alt downstream, and duplicates would be worse.
+	one, err := s.ToolLines(ctx, uid, []model.Locus{ag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 2 {
+		t.Errorf("got %d lines for one allele, want the site's 2", len(one))
+	}
+}
+
+// A header is replaced, not merged. Upserting line-by-line leaves the tail of a
+// longer previous header behind, and the caller gets a splice of two runs.
+func TestToolHeaderIsReplacedNotMerged(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	const uid = "vep:113|GRCh38"
+	loci := []model.Locus{locus(100)}
+	if err := s.PutToolOutput(ctx, uid, []string{"##a", "##b", "##c"}, nil, loci); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutToolOutput(ctx, uid, []string{"##only"}, nil, loci); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ToolHeader(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "##only" {
+		t.Errorf("header is %q, want [##only] — the previous run's tail survived", got)
 	}
 }
 
@@ -197,7 +300,7 @@ func TestOnlyOneSweeperEvicts(t *testing.T) {
 	}
 	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(evictLockKey))
 
-	res, err := s.Evict(ctx, 1, 10)
+	res, err := s.Evict(ctx, store.Budget{MaxEntries: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

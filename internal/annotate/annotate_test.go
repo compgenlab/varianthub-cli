@@ -401,7 +401,7 @@ func TestAnnotateVCFSourcesAndTools(t *testing.T) {
 		t.Fatalf("missing output records:\n%s", data)
 	}
 	// record 1: source annotation + tag + auto-id
-	for _, want := range []string{"clinvar_sig=Pathogenic", "PANEL=v1", "chr1_100_A_G"} {
+	for _, want := range []string{"clinvar_sig=Pathogenic", "PANEL=v1", "1-100-A-G"} {
 		if !strings.Contains(rec1, want) {
 			t.Errorf("rec1 missing %q: %s", want, rec1)
 		}

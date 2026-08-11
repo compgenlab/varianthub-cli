@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -21,6 +22,7 @@ import (
 
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
 	"github.com/compgenlab/varianthub-cli/internal/model"
+	"github.com/compgenlab/varianthub-cli/internal/store"
 )
 
 // decodeFragment decodes one snapshot fragment file with debug-friendly errors:
@@ -105,10 +107,28 @@ func (c *Config) RegistryLocations() []string {
 	return []string{DefaultRegistry}
 }
 
-// Database selects and locates the DB cache backend.
+// Database selects and locates the DB cache backend, and bounds how much it
+// keeps.
+//
+// Both bounds are off by default, so a cache configured without them grows
+// without limit — the behaviour every existing installation already has. Setting
+// one starts trimming at the end of each run.
 type Database struct {
-	Backend string `toml:"backend"` // "sqlite" (default) or "postgres"
-	Path    string `toml:"path"`    // file path (sqlite) or DSN (postgres)
+	Backend string `toml:"backend"` // "sqlite" (default)
+	Path    string `toml:"path"`    // file path
+	// MaxAge discards entries unused for longer than this, as a duration string
+	// ("2160h").
+	MaxAge string `toml:"max_age"`
+}
+
+// CacheBudget is the eviction budget, already parsed. The zero value means
+// unbounded.
+func (c *Config) CacheBudget() store.Budget {
+	var b store.Budget
+	if d, err := time.ParseDuration(c.Database.MaxAge); err == nil {
+		b.MaxAge = d
+	}
+	return b
 }
 
 // Reference pins the reference genome FASTA for one assembly (used by external
@@ -1158,9 +1178,18 @@ func (c *Config) CacheEnabled() bool {
 func (c *Config) validate() error {
 	// assembly is snapshot-scoped now (global is only a fallback), so not required here.
 	switch c.Database.Backend {
-	case "", "none", "sqlite", "postgres":
+	case "", "none", "sqlite":
 	default:
-		return fmt.Errorf("config: unsupported database backend %q (want sqlite|postgres, or omit to disable)", c.Database.Backend)
+		return fmt.Errorf("config: unsupported database backend %q (want sqlite, or omit to disable)", c.Database.Backend)
+	}
+	if s := strings.TrimSpace(c.Database.MaxAge); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("config: database.max_age %q is not a duration (e.g. \"2160h\"): %w", s, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("config: database.max_age must be positive, got %q", s)
+		}
 	}
 	return nil
 }
@@ -1704,7 +1733,7 @@ func (c *Config) resolveDir(d string) string {
 func (c *Config) DataDirAbs() string { return c.resolveDir(c.DataDir) }
 
 // DatabasePathAbs is database.path resolved relative to VARHUB_HOME (the config
-// dir) for sqlite; an absolute path or a postgres DSN is returned unchanged.
+// dir) for sqlite; an absolute path is returned unchanged.
 func (c *Config) DatabasePathAbs() string {
 	if c.Database.Backend != "sqlite" {
 		return c.Database.Path

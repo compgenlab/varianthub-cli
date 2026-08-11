@@ -35,7 +35,7 @@ annotations_dir  = "./annotations"           # root for sources/, snapshots/ (de
 # memoize results. Cached values are scoped by assembly + data source name:version,
 # so different snapshots share a cache safely and GRCh37/GRCh38 never collide.
 [database]
-backend = "sqlite"                # sqlite (default) | postgres (later)
+backend = "sqlite"                # sqlite (default) | none to disable
 path    = "$VARHUB_HOME/varhub.db"
 
 # Reference FASTAs, keyed by assembly. A snapshot's reference is looked up from its

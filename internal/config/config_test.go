@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -568,11 +569,6 @@ func TestDatabasePathAbs(t *testing.T) {
 		t.Errorf("absolute DatabasePathAbs = %q, want /var/lib/v.db", got)
 	}
 
-	cfg.Database.Backend = "postgres"
-	cfg.Database.Path = "postgres://u@h/db"
-	if got := cfg.DatabasePathAbs(); got != "postgres://u@h/db" {
-		t.Errorf("postgres DatabasePathAbs = %q, want the DSN verbatim", got)
-	}
 }
 
 // TestSnapshotReferenceFromAssembly: a snapshot's reference FASTA is looked up from
@@ -1476,5 +1472,47 @@ func TestSnapshotResolvesReferenceFromPinnedSource(t *testing.T) {
 	}
 	if got := snap.RequiresMissingReference(); got != "" {
 		t.Errorf("a snapshot with a reference reported %q missing", got)
+	}
+}
+
+// A cache bound that cannot be parsed is an error, not a no-op: a max_age
+// nothing can read would leave an operator believing the cache was bounded
+// while it grew — a disk that fills weeks later.
+func TestCacheBudgetValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		db      Database
+		wantErr string
+	}{
+		{"max_age parses",
+			Database{Backend: "sqlite", MaxAge: "2160h"}, ""},
+		{"max_age must be a duration",
+			Database{Backend: "sqlite", MaxAge: "90 days"}, "is not a duration"},
+		{"max_age must be positive",
+			Database{Backend: "sqlite", MaxAge: "-1h"}, "must be positive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (&Config{Database: tc.db}).validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("rejected a usable budget: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("accepted %+v, which nothing would ever act on", tc.db)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The parsed budget is what eviction actually receives.
+func TestCacheBudgetParses(t *testing.T) {
+	c := &Config{Database: Database{Backend: "sqlite", MaxAge: "48h"}}
+	if b := c.CacheBudget(); b.MaxAge != 48*time.Hour {
+		t.Errorf("budget is %+v, want 48h", b)
+	}
+	if (&Config{}).CacheBudget().Unbounded() != true {
+		t.Error("an empty [database] should bound nothing")
 	}
 }

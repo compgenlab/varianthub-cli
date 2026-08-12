@@ -3,7 +3,6 @@ package annotate
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	htsann "github.com/compgenlab/cghts/vcf/annotate"
 
@@ -44,7 +43,7 @@ func buildGeneList(cfg *config.Config, src config.Source, anns []config.Annotati
 	}
 	return &geneListAnnotator{
 		model: model, conv: conv, closer: closer, filename: filename,
-		genes: set, useID: strings.EqualFold(src.GeneField, "gene_id"), anns: anns,
+		genes: set, useID: src.MatchesGeneID(), anns: anns,
 	}, nil
 }
 
@@ -82,7 +81,9 @@ func (a *geneListAnnotator) Annotate(rec *vcf.VcfRecord) error {
 		if a.useID {
 			key = g.GeneID
 		}
-		if a.genes[strings.ToUpper(key)] {
+		// Normalized the same way the set was, or a versioned GTF id would never
+		// match the versionless list built from it.
+		if a.genes[config.GeneKey(key, a.useID)] {
 			hit = true
 			break
 		}

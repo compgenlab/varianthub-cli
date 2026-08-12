@@ -247,6 +247,22 @@ download`, same as any GTF source). The annotation is a **flag**: present when t
 gene is in the set (matched case-insensitively), absent otherwise. You can define several
 gene-list sources over the same GTF (e.g. germline cancer, actionable, drug-target).
 
+With `gene_field = "gene_id"`, the **version suffix Ensembl and GENCODE append is ignored on
+both sides**: `ENSG00000141510` and `ENSG00000141510.17` are the same gene. The suffix counts
+revisions of the gene's model rather than the gene, so a list pinned to one of them would
+silently stop matching on the next GENCODE release. Write the ids either way.
+
+### Listing a GTF's genes
+
+```
+varhub genes [--format tsv|json] <gtf-source[:version]>
+```
+
+Writes every gene in a GTF source — `gene_id` then `gene_name`, one per line, ids already
+version-trimmed — so a list can be checked against a real gene model before it is written.
+This streams the file rather than building the in-memory model an annotation run uses, so it
+costs a linear read and a few megabytes rather than the whole gene structure.
+
 ## Commercial-use restrictions
 
 Any source may set `non_commercial = true` to mark that its data/annotations carry

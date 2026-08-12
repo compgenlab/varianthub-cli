@@ -73,6 +73,42 @@ func TestGeneListMatchesGeneID(t *testing.T) {
 	}
 }
 
+// The version suffix counts revisions of the gene's model, not the gene, so a
+// list pinned to one release would silently stop matching on the next. Both
+// sides go through config.GeneKey, which is what makes any of these agree.
+func TestGeneListMatchesAcrossGeneIDVersions(t *testing.T) {
+	for _, c := range []struct{ inGTF, inList string }{
+		{"ENSG00000141510.17", "ENSG00000141510"},    // the case this exists for
+		{"ENSG00000141510.17", "ENSG00000141510.18"}, // a list written against an older release
+		{"ENSG00000141510", "ENSG00000141510.17"},    // an unversioned GTF, a versioned list
+		{"ENSG00000182378.14_PAR_Y", "ENSG00000182378_PAR_Y"},
+	} {
+		model := fakeModel{genes: []*gtf.Gene{{GeneName: "TP53", GeneID: c.inGTF}}}
+		a := newTestGeneList(map[string]bool{config.GeneKey(c.inList, true): true}, model)
+		a.useID = true
+
+		rec := vcf.NewRecord("chr1", 100, "A", []string{"G"})
+		if err := a.Annotate(rec); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := rec.InfoValue("germline_cancer_gene"); !ok {
+			t.Errorf("GTF %q did not match list entry %q", c.inGTF, c.inList)
+		}
+	}
+
+	// Trimming must not make two different genes the same one.
+	model := fakeModel{genes: []*gtf.Gene{{GeneName: "TP53", GeneID: "ENSG00000141510.17"}}}
+	a := newTestGeneList(map[string]bool{config.GeneKey("ENSG00000141511", true): true}, model)
+	a.useID = true
+	rec := vcf.NewRecord("chr1", 100, "A", []string{"G"})
+	if err := a.Annotate(rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rec.InfoValue("germline_cancer_gene"); ok {
+		t.Errorf("a different gene_id matched after version trimming")
+	}
+}
+
 func TestGeneListNoGeneOverlap(t *testing.T) {
 	a := newTestGeneList(map[string]bool{"BRCA1": true}, fakeModel{genes: nil})
 	rec := vcf.NewRecord("chr1", 100, "A", []string{"G"})

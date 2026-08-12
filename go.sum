@@ -86,6 +86,8 @@ github.com/compgenlab/cghts v0.10.4 h1:k+z35gWF4TI5SBO/5C/YfwE65sraGx+LNP6frsJ+a
 github.com/compgenlab/cghts v0.10.4/go.mod h1:uGhwCm/cVAgUH5fXhKDcfSMa0XkO1N3/L1G4opci63M=
 github.com/compgenlab/cghts v0.10.5 h1:WXoJchGsX6eMHF5zH2TxWvcZ1xNiizLrgl8W9Fqr9DY=
 github.com/compgenlab/cghts v0.10.5/go.mod h1:uGhwCm/cVAgUH5fXhKDcfSMa0XkO1N3/L1G4opci63M=
+github.com/compgenlab/cghts v0.10.6 h1:Q5NVAGquRHoWbliSJZfB7EyjTMX2PlChA2LsF9jznbA=
+github.com/compgenlab/cghts v0.10.6/go.mod h1:uGhwCm/cVAgUH5fXhKDcfSMa0XkO1N3/L1G4opci63M=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

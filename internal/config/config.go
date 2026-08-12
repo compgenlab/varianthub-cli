@@ -18,6 +18,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/compgenlab/cghts/gtf"
+
 	"github.com/compgenlab/varianthub-cli/internal/objstore"
 
 	"github.com/compgenlab/varianthub-cli/internal/checksum"
@@ -377,6 +379,28 @@ func (s Source) IsTool() bool { return s.Type == "tool" }
 // IsGeneList reports whether this source flags variants by gene membership.
 func (s Source) IsGeneList() bool { return s.Type == "genelist" }
 
+// MatchesGeneID reports whether this genelist matches on gene_id rather than the
+// default gene_name.
+func (s Source) MatchesGeneID() bool { return strings.EqualFold(s.GeneField, "gene_id") }
+
+// GeneKey normalizes a gene identifier to the form membership is tested in:
+// upper-cased, and for gene_id matching with the Ensembl/GENCODE version suffix
+// removed.
+//
+// Both sides of the comparison go through this — the configured list and the id
+// read out of the GTF — which is the only thing that makes it safe. Dropping the
+// version is what lets a list outlive the GTF it was written against: the suffix
+// counts revisions of a gene's model, so ENSG00000141510.17 and .18 are the same
+// gene, and a list pinned to one of them silently stops matching on the next
+// GENCODE release. Names are left alone; a symbol has no version, and trimming
+// what looks like one would corrupt any symbol that ends in a dotted number.
+func GeneKey(g string, byID bool) string {
+	if byID {
+		g = gtf.TrimGeneIDVersion(g)
+	}
+	return strings.ToUpper(g)
+}
+
 // GenesFilePath resolves a genelist's genes_file: env-expanded, absolute as-is,
 // else relative to the source's fragment directory. Empty when no file is set.
 func (c *Config) GenesFilePath(s Source) string {
@@ -393,12 +417,13 @@ func (c *Config) GenesFilePath(s Source) string {
 // GeneSet resolves a genelist source's membership set: the inline Genes plus, when
 // set, GenesFile (one symbol per line; blank lines and #-comments skipped; the
 // first whitespace/comma-delimited field of each line is taken). Keys are
-// upper-cased for case-insensitive matching.
+// upper-cased for case-insensitive matching, and normalized by GeneKey.
 func (c *Config) GeneSet(s Source) (map[string]bool, error) {
 	set := map[string]bool{}
+	byID := s.MatchesGeneID()
 	add := func(g string) {
 		if g = strings.TrimSpace(g); g != "" {
-			set[strings.ToUpper(g)] = true
+			set[GeneKey(g, byID)] = true
 		}
 	}
 	for _, g := range s.Genes {

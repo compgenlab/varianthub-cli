@@ -129,6 +129,8 @@ func run(args []string) error {
 		return cmdTabix(cmdArgs)
 	case "vcf-merge": // combine same-order per-source VCFs (the annotate -t fan-out merge)
 		return cmdVcfMerge(cmdArgs)
+	case "genes":
+		return cmdGenes(ctx, *cfgPath, *snapshotName, cmdArgs)
 	}
 
 	// `versions` needs the engine (config + snapshot + store + annotator).
@@ -161,6 +163,8 @@ config commands:
   source add [flags] [--snapshot S]  add a source (prompts when flags omitted)
   annotation add --source R [flags]  add an annotation to a source
   annotation list <snapshot>   list annotations + the default set
+  genes [--format tsv|json] <gtf-source[:version]>
+                               list a GTF source's genes (gene_id, gene_name)
   download [--source N] [--force] [-j N]  fetch the snapshot's sources (incl. tool images) + index
   registry list|pull-snapshot <name>|add-source <name[:version]> [--snapshot S]
   registry submit <name[:version]> [--dry-run]  propose a source to the public registry

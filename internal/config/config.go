@@ -992,6 +992,37 @@ func ValidAnnotationType(t string) bool {
 	return false
 }
 
+// ValidAnnotationName reports whether a name may be written as a VCF INFO key.
+//
+// The VCF specification requires an INFO ID to match [A-Za-z_][0-9A-Za-z_.]*,
+// and an annotation's name is written into the output as exactly that — with no
+// sanitising, because a name silently altered on the way out is a column the
+// person who declared it cannot find again.
+//
+// So the constraint is enforced where the name is chosen rather than where it is
+// used. A manifest declaring "gnomAD-AF" produces a file that a strict parser
+// rejects and a lenient one reads as something else, and the failure surfaces
+// nowhere near the manifest — at the far end of somebody's pipeline, weeks
+// later, in a tool nobody here runs. Refusing it at definition time costs one
+// rename by the person best placed to choose the new name.
+func ValidAnnotationName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= '0' && r <= '9', r == '.':
+			if i == 0 {
+				return false // a leading digit or dot is not a legal ID
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // IsFlag reports whether this is a presence-flag annotation.
 func (a Annotation) IsFlag() bool { return a.Type == "flag" }
 
@@ -1691,6 +1722,12 @@ func validateBuiltinSource(s *Source) error {
 		if !IsBuiltin(a.Builtin) {
 			return fmt.Errorf("builtin %q is not recognized (want %s)", a.Builtin, strings.Join(BuiltinNames, "|"))
 		}
+		// A builtin's name is written as an INFO key like any other, so it is
+		// held to the same rule. Checked here because a builtin source does not
+		// go through validateFileAnnotation — it has no field to read.
+		if err := checkAnnotationName(a.Name); err != nil {
+			return err
+		}
 		if (a.Builtin == "tags" || a.Builtin == "copy_logratio") && a.Args == "" {
 			return fmt.Errorf("builtin %q needs args", a.Builtin)
 		}
@@ -1698,10 +1735,49 @@ func validateBuiltinSource(s *Source) error {
 	return nil
 }
 
+// checkAnnotationName reports why a name cannot be a VCF INFO key.
+//
+// The message names a legal alternative rather than restating the rule, because
+// the fix is always a rename and the character that offended is usually a
+// hyphen someone took from the source's own field name.
+func checkAnnotationName(name string) error {
+	if ValidAnnotationName(name) {
+		return nil
+	}
+	return fmt.Errorf("annotation %q is not a valid VCF INFO key: it must start "+
+		"with a letter or underscore and contain only letters, digits, "+
+		"underscores and dots (try %q)", name, suggestAnnotationName(name))
+}
+
+// suggestAnnotationName renders a name as the nearest legal INFO key.
+func suggestAnnotationName(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9', r == '.':
+			if i == 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "_"
+	}
+	return b.String()
+}
+
 // validateFileAnnotation checks a file/tool annotation (key + type).
 func validateFileAnnotation(a Annotation) error {
 	if a.Name == "" {
 		return fmt.Errorf("annotation needs a key")
+	}
+	if err := checkAnnotationName(a.Name); err != nil {
+		return err
 	}
 	if !ValidAnnotationType(a.Type) {
 		return fmt.Errorf("annotation %q: unknown type %q (want %s)", a.Name, a.Type, strings.Join(AnnotationTypes, "|"))

@@ -380,6 +380,24 @@ func buildSourceGroup(src config.Source, anns []config.Annotation, files []confi
 	}), nil
 }
 
+// infoTypeOf declares what a manifest annotation's values are, for the ##INFO
+// def the annotator writes.
+//
+// The manifest's vocabulary is categorical|text|numeric|flag, which is about how
+// a value is presented; VCF wants what it is. Only "numeric" carries information
+// the header did not already have, and it is the one that mattered: a score
+// declared String reaches every consumer as a string, so a tool sorts "10"
+// before "9" on a file whose numbers are perfectly correct.
+//
+// Float rather than Integer because the manifest cannot say which, and a whole
+// number is a valid Float while a fractional one is not a valid Integer.
+func infoTypeOf(a config.Annotation) htsann.InfoType {
+	if a.IsNumeric() {
+		return htsann.TypeFloat
+	}
+	return htsann.TypeString
+}
+
 // buildGroupedSingle maps a source's annotations onto one hts grouped annotator for a
 // single file. The per-field mapping matches buildSingle; only the shape differs (N
 // fields on one reader instead of one annotator per field).
@@ -400,6 +418,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 			fields = append(fields, htsann.VcfFieldOptions{
 				Name:   a.Name,
 				Field:  field,
+				Type:   infoTypeOf(a),
 				Exact:  a.Match != "position", // default exact; "position" = position-only
 				Unique: a.Unique,
 			})
@@ -412,7 +431,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 		for _, a := range anns {
 			col, colName := bedColumn(a.FieldName())
 			fields = append(fields, htsann.TabixFieldOptions{
-				Name: a.Name, Col: col, ColName: colName, IsNumber: a.IsNumeric(),
+				Name: a.Name, Col: col, ColName: colName, Type: infoTypeOf(a),
 			})
 		}
 		return htsann.NewTabixAnnotationGroup(htsann.TabixGroupOptions{
@@ -423,7 +442,7 @@ func buildGroupedSingle(src config.Source, anns []config.Annotation, path string
 		for _, a := range anns {
 			col, colName := tabColumn(a.FieldName())
 			fields = append(fields, htsann.TabixFieldOptions{
-				Name: a.Name, Col: col, ColName: colName, IsNumber: a.IsNumeric(),
+				Name: a.Name, Col: col, ColName: colName, Type: infoTypeOf(a),
 			})
 		}
 		return htsann.NewTabixAnnotationGroup(htsann.TabixGroupOptions{
@@ -621,6 +640,7 @@ func buildSingle(src config.Source, a config.Annotation, path string) (htsann.An
 		return htsann.NewVcfAnnotation(htsann.VcfOptions{
 			Name:        a.Name,
 			Field:       field,
+			Type:        infoTypeOf(a),
 			Filename:    path,
 			Reader:      tr,
 			Exact:       a.Match != "position", // default exact; "position" = position-only
@@ -628,12 +648,12 @@ func buildSingle(src config.Source, a config.Annotation, path string) (htsann.An
 			AutoConvert: true,
 		})
 	case "bed":
-		opts := htsann.TabixOptions{Name: a.Name, Filename: path, Reader: tr, IsNumber: a.IsNumeric(), AutoConvert: true}
+		opts := htsann.TabixOptions{Name: a.Name, Filename: path, Reader: tr, Type: infoTypeOf(a), AutoConvert: true}
 		setBedColumn(&opts, a.FieldName())
 		return htsann.NewTabixAnnotator(opts)
 	case "tab":
 		opts := htsann.TabixOptions{
-			Name: a.Name, Filename: path, Reader: tr, IsNumber: a.IsNumeric(),
+			Name: a.Name, Filename: path, Reader: tr, Type: infoTypeOf(a),
 			AltCol: src.AltCol, RefCol: src.RefCol, AutoConvert: true,
 		}
 		setTabColumn(&opts, a.FieldName())
@@ -658,7 +678,7 @@ func buildSingle(src config.Source, a config.Annotation, path string) (htsann.An
 			return nil, fmt.Errorf("source %q: %w", src.ID(), err)
 		}
 		return htsann.NewBigBedAnnotator(htsann.BigBedOptions{
-			Name: a.Name, Filename: path, Reader: br, Col: col, IsNumber: a.IsNumeric(), AutoConvert: true,
+			Name: a.Name, Filename: path, Reader: br, Col: col, Type: infoTypeOf(a), AutoConvert: true,
 		})
 	default:
 		return nil, fmt.Errorf("source %q: unsupported format %q", src.ID(), src.Format)

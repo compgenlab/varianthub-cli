@@ -279,6 +279,9 @@ func cmdAnnotate(ctx context.Context, cfgPath, snapshot string, args []string) e
 	noCache := fs.Bool("no-cache", false, "ignore the annotation cache DB entirely: compute every locus fresh and persist nothing")
 	verbose := fs.Bool("verbose", false, "print progress to stderr (phases, tool cache hits, variant counts)")
 	fs.BoolVar(verbose, "v", false, "shorthand for --verbose")
+	lociFile := fs.String("loci-file", "",
+		"read loci from this file, one per line (blank lines and #-comments skipped) "+
+			"instead of taking them as arguments")
 	var keys stringList
 	fs.Var(&keys, "annotation", "annotation name to apply (repeatable, comma-separated)")
 	fs.Var(&keys, "a", "shorthand for --annotation")
@@ -291,6 +294,19 @@ func cmdAnnotate(ctx context.Context, cfgPath, snapshot string, args []string) e
 	rest := fs.Args()
 	if *all && len(keys) > 0 {
 		return fmt.Errorf("use --all or -a, not both")
+	}
+	// --loci-file replaces the positional loci rather than adding to them, so
+	// there is one place a run's input comes from and no question about ordering
+	// or precedence between the two.
+	if *lociFile != "" {
+		if len(rest) > 0 {
+			return fmt.Errorf("--loci-file and positional loci are alternatives; pass one")
+		}
+		lines, err := readLociFile(*lociFile)
+		if err != nil {
+			return err
+		}
+		rest = lines
 	}
 
 	// Under -v, carry a nil-safe progress logger through the pipeline via ctx.
@@ -423,6 +439,46 @@ func withSelectedTools(snap *config.Snapshot, selected []config.Annotation) []co
 
 // readLoci parses loci from CLI args: a single existing file is read as a VCF,
 // otherwise each arg is a chrom:pos:ref:alt locus.
+// readLociFile reads one locus per line, skipping blank lines and #-comments.
+//
+// Exists because loci passed as arguments are bounded by the kernel's ARG_MAX,
+// and a caller submitting a large batch does not discover that as "too many
+// loci" — the exec itself fails, somewhere north of a couple of megabytes of
+// argv, with an error that says nothing about the input. A file has no such
+// ceiling and the failure modes it does have (missing, unreadable) name
+// themselves.
+//
+// Deliberately not a VCF: this is the batch-of-loci input, and treating it as a
+// VCF would mean guessing at the format of a file whose whole purpose is to be
+// the simple one. Callers with a VCF pass it positionally, as before.
+func readLociFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open --loci-file: %w", err)
+	}
+	defer f.Close()
+
+	var out []string
+	sc := bufio.NewScanner(f)
+	// A locus is short, but the buffer default (64K) would turn one malformed
+	// enormous line into "token too long", which says nothing useful.
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("read --loci-file %s: %w", path, err)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--loci-file %s has no loci in it", path)
+	}
+	return out, nil
+}
+
 func readLoci(rest []string) ([]model.Locus, error) {
 	if len(rest) == 1 && fileExists(rest[0]) {
 		return vcf.ReadFile(rest[0])

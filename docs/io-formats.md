@@ -35,11 +35,18 @@ Two internal paths back this:
 ## Annotate output
 
 ```sh
-varhub annotate [--all | -a name,…] [--format tab|vcf|json|text] [-o FILE] <vcf|locus…>
+varhub annotate [--all | -a name,…] [--format tab|vcf|json|text] [-o FILE]
+                [--loci-file FILE] <vcf|locus…>
 ```
 
 - **`--format`** selects the rendering; the default is **`tab`**.
 - **`-o FILE`** writes the output to a file (stdout if omitted) — for *any* format.
+- **`--loci-file FILE`** reads the loci from a file, one per line (blank lines and
+  `#`-comments skipped), instead of taking them as arguments. Use it for a large batch:
+  loci given as arguments are bounded by the kernel's `ARG_MAX`, and a batch past that
+  does not fail as "too many loci" — the `exec` itself fails, with an error naming
+  neither the limit nor the input. A file has no such ceiling. It replaces the
+  positional loci rather than adding to them; pass one or the other, not both.
 - **`-v` / `--verbose`** prints progress to **stderr** (stdout still carries the results):
   which phase is running (external tool, pipeline build, single pass vs. a per-source fan-out),
   a running variant/record count, per-job completion during a parallel (`-t N`) run, and — on

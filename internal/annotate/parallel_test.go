@@ -116,7 +116,7 @@ func TestAnnotateVCFParallelMatchesSequential(t *testing.T) {
 		t.Errorf("parallel output differs from sequential:\n--- sequential ---\n%s\n--- parallel ---\n%s", seq, par)
 	}
 	// Sanity: the annotations actually appear (not a vacuous match).
-	for _, want := range []string{"CG_TSTV=TS", "CG_VARDIST=100", "SCOREA=0.10", "SCOREB=0.90", "CG_DS="} {
+	for _, want := range []string{"tstv=TS", "vardist=100", "SCOREA=0.10", "SCOREB=0.90", "dosage="} {
 		if !strings.Contains(seq, want) {
 			t.Errorf("expected %q in annotated output, got:\n%s", want, seq)
 		}

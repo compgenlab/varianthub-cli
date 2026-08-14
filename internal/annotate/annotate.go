@@ -242,7 +242,15 @@ func BuildPipeline(cfg *config.Config, snap *config.Snapshot, resolve func(confi
 	for _, a := range snap.Annotations {
 		if config.IsBuiltin(a.Source) {
 			if a.Source == "vardist" {
-				p.AddStream(htsann.NewVariantDistance()) // streaming (look-ahead)
+				// Streaming (look-ahead), so it is added apart from the rest —
+				// but it is named like the rest. Building it here rather than
+				// through builtinAnnotator is what left it writing CG_VARDIST
+				// while its neighbours had started honouring the manifest.
+				vd := htsann.NewVariantDistance()
+				if names := builtinFieldNames(a); len(names) > 0 {
+					vd.SetFieldNames(names)
+				}
+				p.AddStream(vd)
 				continue
 			}
 			ann, err := builtinAnnotator(a)
@@ -750,6 +758,67 @@ func BuiltinAnnotator(a config.Annotation) (htsann.Annotator, error) {
 }
 
 func builtinAnnotator(a config.Annotation) (htsann.Annotator, error) {
+	ann, err := newBuiltin(a)
+	if err != nil {
+		return nil, err
+	}
+	// The manifest's name is what the field is called in the output. Without
+	// this the annotator writes a fixed name of its own — CG_TSTV for an
+	// annotation declared as tstv — and `name` means one thing on this path and
+	// another on the engine's, which reads the fixed name back and files it
+	// under the declared one. Two answers to what one manifest means.
+	if n, ok := ann.(htsann.FieldNamer); ok {
+		if names := builtinFieldNames(a); len(names) > 0 {
+			n.SetFieldNames(names)
+		}
+	}
+	return ann, nil
+}
+
+// builtinFieldNames maps a builtin's logical fields onto the name the manifest
+// gave it.
+//
+// One name and, for most builtins, one field, so the mapping is direct. indel is
+// the exception: it writes five fields describing one thing, and a manifest
+// naming it "indel" means the set. They are prefixed with that name rather than
+// replaced by it, since five fields cannot share one key — so `name = "indel"`
+// yields indel_INSERT, indel_INSLEN and so on, which at least says where they
+// came from and what they are.
+//
+// auto_id takes none: it sets the record's ID column, which is where a variant
+// identifier belongs, so there is no field for a name to apply to.
+func builtinFieldNames(a config.Annotation) htsann.FieldNames {
+	if a.Name == "" {
+		return nil
+	}
+	switch a.Source {
+	case "tstv":
+		return htsann.FieldNames{htsann.TsTvField: a.Name}
+	case "vardist":
+		return htsann.FieldNames{htsann.VarDistField: a.Name}
+	case "copy_logratio":
+		return htsann.FieldNames{htsann.CopyLogRatio: a.Name}
+	case "dosage":
+		return htsann.FieldNames{htsann.DosageField: a.Name}
+	case "vaf":
+		return htsann.FieldNames{htsann.VAFField: a.Name}
+	case "minor_strand":
+		return htsann.FieldNames{htsann.MinorStrand: a.Name}
+	case "fisher_sb":
+		return htsann.FieldNames{htsann.FisherStrandB: a.Name}
+	case "indel":
+		return htsann.FieldNames{
+			htsann.IndelInsert:   a.Name + "_INSERT",
+			htsann.IndelDelete:   a.Name + "_DELETE",
+			htsann.IndelInsLen:   a.Name + "_INSLEN",
+			htsann.IndelDelLen:   a.Name + "_DELLEN",
+			htsann.IndelIndelLen: a.Name + "_INDELLEN",
+		}
+	}
+	return nil
+}
+
+func newBuiltin(a config.Annotation) (htsann.Annotator, error) {
 	switch a.Source {
 	case "auto_id":
 		return htsann.NewAutoID(), nil

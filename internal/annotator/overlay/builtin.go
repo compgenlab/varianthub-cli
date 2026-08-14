@@ -90,16 +90,25 @@ func extractBuiltin(l model.Locus, sourceID string, a config.Annotation, rec *vc
 			return row, true
 		}
 	case "tstv":
-		if v, ok := rec.InfoValue("CG_TSTV"); ok && !v.IsMissing() && v.String() != "" {
+		// Read under the manifest's name, which is what the annotator now writes
+		// there. This used to look for CG_TSTV and file the value under a.Name —
+		// a translation that existed only on this path, so `name` meant one
+		// thing here and another in a VCF. The annotator is told the name now,
+		// and this simply reads it.
+		if v, ok := rec.InfoValue(a.Name); ok && !v.IsMissing() && v.String() != "" {
 			row.Value = model.Text(v.String())
 			return row, true
 		}
 	case "indel":
-		if _, ok := rec.InfoValue("CG_INSERT"); ok {
+		// Still a derivation rather than a read: the annotator writes five
+		// fields describing the change, and this path reports one categorical
+		// value. The names follow the manifest, so the fields it inspects are
+		// the ones the annotator was told to write.
+		if _, ok := rec.InfoValue(a.Name + "_INSERT"); ok {
 			row.Value = model.Text("insertion")
 			return row, true
 		}
-		if _, ok := rec.InfoValue("CG_DELETE"); ok {
+		if _, ok := rec.InfoValue(a.Name + "_DELETE"); ok {
 			row.Value = model.Text("deletion")
 			return row, true
 		}

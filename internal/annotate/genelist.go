@@ -17,7 +17,7 @@ import (
 // via buildGeneList and closed by the caller (shares the GTF query surface with
 // gtfAnnotator through openGeneModel).
 type geneListAnnotator struct {
-	model    geneModel
+	model    htsann.GeneModel
 	conv     *vcf.ContigConverter
 	closer   io.Closer
 	filename string

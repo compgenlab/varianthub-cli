@@ -186,8 +186,27 @@ func TestGTFHeaderDefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Lower-case field is upper-cased; both fields are registered.
-	if len(a.fields) != 2 || a.fields[1].key != "REGION" {
-		t.Fatalf("fields = %+v, want field[1].key=REGION", a.fields)
+	defer a.Close()
+
+	// Both fields are declared, under the names the manifest gave them — and a
+	// lower-case `field` still resolves, so "region" selects REGION.
+	//
+	// Asserted through the header the annotator writes rather than through its
+	// internals: the annotator lives in cghts now, and what matters here is what
+	// this service's configuration produces, not how the library stores it.
+	h := vcf.NewVcfHeader()
+	if err := a.SetupHeader(h); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"gene", "rgn"} {
+		if _, ok := h.InfoDef(want); !ok {
+			t.Errorf("%q was configured but not declared; header has %v", want, h.InfoIDs())
+		}
+	}
+	// And nothing the manifest did not ask for.
+	for _, unwanted := range []string{"GTF_GENE", "GTF_REGION", "GTF_STRAND", "GTF_GENEID"} {
+		if _, ok := h.InfoDef(unwanted); ok {
+			t.Errorf("%q was declared though no annotation selected it", unwanted)
+		}
 	}
 }

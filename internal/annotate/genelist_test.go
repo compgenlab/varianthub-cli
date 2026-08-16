@@ -1,6 +1,7 @@
 package annotate
 
 import (
+	htsann "github.com/compgenlab/cghts/vcf/annotate"
 	"testing"
 
 	"github.com/compgenlab/cghts/bed"
@@ -10,7 +11,7 @@ import (
 	"github.com/compgenlab/varianthub-cli/internal/config"
 )
 
-// fakeModel is a geneModel that returns preset genes for chr1 regardless of range.
+// fakeModel is a htsann.GeneModel that returns preset genes for chr1 regardless of range.
 type fakeModel struct{ genes []*gtf.Gene }
 
 func (m fakeModel) FindGenes(ref string, _, _ int) []*gtf.Gene {
@@ -22,9 +23,10 @@ func (m fakeModel) FindGenes(ref string, _, _ int) []*gtf.Gene {
 func (m fakeModel) FindGenicRegionForPos(string, int, bed.Strand, string) gtf.GenicRegion {
 	return gtf.GenicRegion{}
 }
-func (m fakeModel) RefNames() []string { return []string{"chr1"} }
+func (m fakeModel) RefNames() []string   { return []string{"chr1"} }
+func (m fakeModel) HasRef(r string) bool { return r == "chr1" }
 
-func newTestGeneList(genes map[string]bool, model geneModel) *geneListAnnotator {
+func newTestGeneList(genes map[string]bool, model htsann.GeneModel) *geneListAnnotator {
 	return &geneListAnnotator{
 		model: model,
 		conv:  vcf.NewContigConverter([]string{"chr1"}),

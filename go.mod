@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/compgenlab/cghts v0.10.16
+	github.com/compgenlab/cghts v0.10.17
 	golang.org/x/sync v0.20.0
 	modernc.org/sqlite v1.53.0
 )

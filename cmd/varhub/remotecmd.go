@@ -52,11 +52,21 @@ func cmdLogin(ctx context.Context, args []string) error {
 	server := fs.String("server", "", "VariantHub base URL, e.g. https://varianthub.example.org")
 	token := fs.String("token", "", "API token (omit to be prompted, which keeps it out of shell history)")
 	check := fs.Bool("check", true, "verify the server accepts the token before saving")
+	profile := fs.String("profile", "", "name this server, so several can be kept (default: \"default\")")
+	makeDefault := fs.Bool("default", false, "make this profile the one used when none is named")
+	list := fs.Bool("list", false, "show the configured profiles and exit")
+	forget := fs.String("forget", "", "remove a profile and exit")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, strings.TrimLeft(`
-usage: varhub login --server URL [--token TOKEN]
+usage: varhub login --server URL [--token TOKEN] [--profile NAME]
+       varhub login --list
+       varhub login --forget NAME
 
 Stores a VariantHub server and API token for submit/status/fetch.
+
+Several servers can be kept as named profiles — a production deployment and a
+local one, say — and any command takes --profile to pick one. Without it the
+file's default is used, or the only profile when there is exactly one.
 
 A token is the only credential this program accepts. There is no
 username-and-password path on purpose: a password typed at a command line ends
@@ -77,14 +87,36 @@ VARHUB_SERVER and VARHUB_TOKEN override the stored values for one invocation.
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *list {
+		return listProfiles()
+	}
+	if *forget != "" {
+		gone, err := remote.Forget(*forget)
+		if err != nil {
+			return err
+		}
+		if !gone {
+			return fmt.Errorf("no profile %q", *forget)
+		}
+		fmt.Printf("Removed profile %q\n", *forget)
+		return nil
+	}
 
-	cur, _ := remote.Load()
+	// The profile being edited, which is also what supplies the half the caller
+	// did not give — changing a token should not require restating the server.
+	f, err := remote.LoadFile()
+	if err != nil {
+		return err
+	}
+	name := f.ProfileName(*profile)
+	cur := f.Profiles[name]
+
 	c := remote.Credentials{Server: cur.Server, Token: cur.Token}
 	if *server != "" {
 		c.Server = strings.TrimRight(strings.TrimSpace(*server), "/")
 	}
 	if c.Server == "" {
-		return fmt.Errorf("--server is required the first time")
+		return fmt.Errorf("--server is required the first time for profile %q", name)
 	}
 
 	switch {
@@ -93,7 +125,7 @@ VARHUB_SERVER and VARHUB_TOKEN override the stored values for one invocation.
 	default:
 		// Prompted rather than required as a flag, so the usual path keeps the
 		// token out of `ps` and out of shell history.
-		fmt.Fprintf(os.Stderr, "API token for %s: ", c.Server)
+		fmt.Fprintf(os.Stderr, "API token for %s (profile %s): ", c.Server, name)
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil && strings.TrimSpace(line) == "" {
 			return fmt.Errorf("no token given")
@@ -112,11 +144,44 @@ VARHUB_SERVER and VARHUB_TOKEN override the stored values for one invocation.
 		}
 	}
 
-	path, err := remote.Save(c)
+	path, err := remote.Save(name, c, *makeDefault)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Saved credentials for %s to %s\n", c.Server, path)
+	fmt.Printf("Saved profile %q (%s) to %s\n", name, c.Server, path)
+	return nil
+}
+
+// listProfiles shows what is configured, and never a token.
+//
+// The server and which one is default are what somebody needs to see; printing
+// the token would put a credential on a terminal, into a scrollback buffer, and
+// into whatever captured the output — for a command whose whole purpose is to
+// answer "which of these am I using".
+func listProfiles() error {
+	f, err := remote.LoadFile()
+	if err != nil {
+		return err
+	}
+	names := f.Names()
+	if len(names) == 0 {
+		fmt.Println("No profiles. Run `varhub login --server URL`.")
+		return nil
+	}
+	active := f.ProfileName("")
+	for _, n := range names {
+		mark := "  "
+		if n == active {
+			mark = "* "
+		}
+		fmt.Printf("%s%-16s %s\n", mark, n, f.Profiles[n].Server)
+	}
+	if v := os.Getenv("VARHUB_SERVER"); v != "" {
+		fmt.Fprintf(os.Stderr, "\nnote: VARHUB_SERVER=%s overrides the server above\n", v)
+	}
+	if os.Getenv("VARHUB_TOKEN") != "" {
+		fmt.Fprintln(os.Stderr, "note: VARHUB_TOKEN overrides the token above")
+	}
 	return nil
 }
 
@@ -130,6 +195,7 @@ func cmdSubmit(ctx context.Context, args []string) error {
 	wait := fs.Bool("wait", false, "poll until the job finishes")
 	out := fs.String("o", "", "with --wait, fetch the results here when it finishes")
 	format := fs.String("format", "", "with -o: vcf | tsv | csv | json (default: the server's)")
+	profile := fs.String("profile", "", "which saved server to use (default: the file's)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, strings.TrimLeft(`
 usage: varhub submit [flags] <file.vcf | chrom:pos:ref:alt ...>
@@ -150,7 +216,7 @@ sources. The variants leave this machine.
 		return fmt.Errorf("give a VCF file or one or more chrom:pos:ref:alt")
 	}
 
-	creds, cerr := remote.Require()
+	creds, cerr := remote.Require(*profile)
 	if cerr != nil {
 		return cerr
 	}
@@ -202,8 +268,9 @@ sources. The variants leave this machine.
 func cmdStatus(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	wait := fs.Bool("wait", false, "poll until the job finishes")
+	profile := fs.String("profile", "", "which saved server to use (default: the file's)")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: varhub status [--wait] <job-id>\n")
+		fmt.Fprint(os.Stderr, "usage: varhub status [--wait] [--profile NAME] <job-id>\n")
 		fs.PrintDefaults()
 	}
 	rest, err := parseAnywhere(fs, args)
@@ -214,7 +281,7 @@ func cmdStatus(ctx context.Context, args []string) error {
 		fs.Usage()
 		return fmt.Errorf("give one job id")
 	}
-	creds, err := remote.Require()
+	creds, err := remote.Require(*profile)
 	if err != nil {
 		return err
 	}
@@ -241,6 +308,7 @@ func cmdFetch(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
 	format := fs.String("format", "", "vcf | tsv | csv | json (default: the server's, which is vcf for a VCF job)")
 	out := fs.String("o", "-", "write here; - is stdout")
+	profile := fs.String("profile", "", "which saved server to use (default: the file's)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, strings.TrimLeft(`
 usage: varhub fetch [--format F] [-o FILE] <job-id>
@@ -259,7 +327,7 @@ relayed — so this is the cheap way to move a large result.
 		fs.Usage()
 		return fmt.Errorf("give one job id")
 	}
-	creds, err := remote.Require()
+	creds, err := remote.Require(*profile)
 	if err != nil {
 		return err
 	}

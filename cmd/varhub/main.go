@@ -191,9 +191,13 @@ annotation commands:
   version                      print the varhub version
 
 remote commands (a VariantHub server, not this machine):
-  login --server URL [--token T]  save a server and API token (prompts for the
+  login --server URL [--token T] [--profile NAME]
+                               save a server and API token (prompts for the
                                token when omitted, keeping it out of shell
                                history). A token is the only credential.
+                               --list shows the saved profiles; --forget NAME
+                               removes one. Several servers can be kept and
+                               picked with --profile or VARHUB_PROFILE.
   submit [--snapshot S] [--select a,b] [--wait [-o FILE]] <vcf|locus...>
                                send variants to the server; prints the job id
   status [--wait] <job-id>     what the server has done with it

@@ -131,6 +131,18 @@ func run(args []string) error {
 		return cmdVcfMerge(cmdArgs)
 	case "genes":
 		return cmdGenes(ctx, *cfgPath, *snapshotName, cmdArgs)
+
+	// Talking to a VariantHub server. These need no config.toml and no local
+	// sources — the whole point is that the data is somewhere else — so they
+	// are dispatched here, before anything tries to build an engine.
+	case "login":
+		return cmdLogin(ctx, cmdArgs)
+	case "submit":
+		return cmdSubmit(ctx, cmdArgs)
+	case "status":
+		return cmdStatus(ctx, cmdArgs)
+	case "fetch":
+		return cmdFetch(ctx, cmdArgs)
 	}
 
 	// `versions` needs the engine (config + snapshot + store + annotator).
@@ -177,6 +189,19 @@ annotation commands:
                                --temp-dir DIR puts scratch files there (default: config temp_dir, else $TMPDIR)
   versions                     show the active snapshot
   version                      print the varhub version
+
+remote commands (a VariantHub server, not this machine):
+  login --server URL [--token T]  save a server and API token (prompts for the
+                               token when omitted, keeping it out of shell
+                               history). A token is the only credential.
+  submit [--snapshot S] [--select a,b] [--wait [-o FILE]] <vcf|locus...>
+                               send variants to the server; prints the job id
+  status [--wait] <job-id>     what the server has done with it
+  fetch [--format vcf|tsv|csv|json] [-o FILE] <job-id>
+                               download a finished job's results
+
+  These send the variants somewhere else; annotate runs here against local
+  sources. VARHUB_SERVER and VARHUB_TOKEN override the saved credentials.
 `)
 }
 

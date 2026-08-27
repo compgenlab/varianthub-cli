@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -251,7 +252,7 @@ sources. The variants leave this machine.
 		return nil
 	}
 
-	j, err := waitFor(ctx, c, id)
+	j, err := waitFor(ctx, c, id, true)
 	if err != nil {
 		return err
 	}
@@ -292,12 +293,82 @@ func cmdStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	if *wait && !j.Terminal() {
-		if j, err = waitFor(ctx, c, rest[0]); err != nil {
+		if j, err = waitFor(ctx, c, rest[0], true); err != nil {
 			return err
 		}
 	}
 	printJob(j)
 	if j.Status == "error" {
+		return jobFailed(j)
+	}
+	return nil
+}
+
+// cmdWait blocks until a job finishes.
+//
+// The counterpart of the server's callback, and it exists because the two serve
+// opposite situations. A callback is for something with an address — a service
+// that can be reached, told once, and left alone. This is for everything that
+// cannot be: a laptop behind NAT, a batch script, a CI step. Neither replaces
+// the other, and a deployment will use both.
+//
+// The exit status is the point. `varhub wait X && varhub fetch X` reads the way
+// a shell script wants it to: a failed job exits non-zero, so the fetch does not
+// run and the script stops on the failure rather than on the empty file that
+// would follow it.
+func cmdWait(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("wait", flag.ContinueOnError)
+	profile := fs.String("profile", "", "which saved server to use (default: the file's)")
+	timeout := fs.Duration("timeout", 0, "give up after this long (default: wait indefinitely)")
+	quiet := fs.Bool("q", false, "no progress on stderr")
+	fs.Usage = func() {
+		fmt.Fprint(os.Stderr, strings.TrimLeft(`
+usage: varhub wait [--timeout D] [-q] <job-id>
+
+Blocks until the job finishes. Exits 0 if it succeeded and non-zero if it
+failed, was cancelled, or the wait timed out — so this composes:
+
+    varhub wait $ID && varhub fetch $ID -o out.vcf.gz
+
+Progress goes to stderr, so it stays out of a pipe.
+`, "\n"))
+		fs.PrintDefaults()
+	}
+	rest, err := parseAnywhere(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		fs.Usage()
+		return fmt.Errorf("give one job id")
+	}
+	creds, err := remote.Require(*profile)
+	if err != nil {
+		return err
+	}
+	c := remote.New(creds)
+
+	if *timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
+
+	j, err := waitFor(ctx, c, rest[0], !*quiet)
+	if err != nil {
+		// A timeout is not a failed job, and saying so matters: the work is
+		// still running, and the id is still good.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("job %s is still running after %s; it has not failed",
+				rest[0], *timeout)
+		}
+		return err
+	}
+	if !*quiet {
+		fmt.Fprintln(os.Stderr)
+	}
+	printJob(j)
+	if j.Status != "done" {
 		return jobFailed(j)
 	}
 	return nil
@@ -369,7 +440,7 @@ func fetchTo(ctx context.Context, c *remote.Client, id, format, out string) erro
 //
 // Backing off from a second to fifteen. A job that finishes quickly is noticed
 // quickly; one that takes an hour is not asked about three thousand times.
-func waitFor(ctx context.Context, c *remote.Client, id string) (remote.Job, error) {
+func waitFor(ctx context.Context, c *remote.Client, id string, progress bool) (remote.Job, error) {
 	delay := time.Second
 	for {
 		j, err := c.Status(ctx, id)
@@ -379,7 +450,9 @@ func waitFor(ctx context.Context, c *remote.Client, id string) (remote.Job, erro
 		if j.Terminal() {
 			return j, nil
 		}
-		printProgress(j)
+		if progress {
+			printProgress(j)
+		}
 		select {
 		case <-ctx.Done():
 			return remote.Job{}, ctx.Err()

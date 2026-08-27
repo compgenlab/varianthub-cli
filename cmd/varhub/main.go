@@ -141,6 +141,8 @@ func run(args []string) error {
 		return cmdSubmit(ctx, cmdArgs)
 	case "status":
 		return cmdStatus(ctx, cmdArgs)
+	case "wait":
+		return cmdWait(ctx, cmdArgs)
 	case "fetch":
 		return cmdFetch(ctx, cmdArgs)
 	}
@@ -201,6 +203,8 @@ remote commands (a VariantHub server, not this machine):
   submit [--snapshot S] [--select a,b] [--wait [-o FILE]] <vcf|locus...>
                                send variants to the server; prints the job id
   status [--wait] <job-id>     what the server has done with it
+  wait [--timeout D] <job-id>  block until it finishes; exits non-zero if the
+                               job failed, so wait && fetch composes
   fetch [--format vcf|tsv|csv|json] [-o FILE] <job-id>
                                download a finished job's results
 
